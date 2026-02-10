@@ -1,5 +1,5 @@
 # ============================================================
-# Base Image
+# Base Image (CUDA runtime-capable, CI-safe)
 # ============================================================
 FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
 
@@ -11,15 +11,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
+    ninja-build \
     git \
     curl \
-    wget \
     ca-certificates \
     python3 \
     python3-dev \
     python3-pip \
     python3-setuptools \
-    ninja-build \
     llvm-14 \
     llvm-14-dev \
     clang-14 \
@@ -29,10 +28,11 @@ RUN apt-get update && apt-get install -y \
     libzstd-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# TVM expects llvm-config
 RUN ln -s /usr/bin/llvm-config-14 /usr/bin/llvm-config
 
 # ============================================================
-# Python Dependencies
+# Python Dependencies (runtime only)
 # ============================================================
 RUN pip3 install --upgrade pip && \
     pip3 install \
@@ -47,34 +47,21 @@ RUN pip3 install --upgrade pip && \
         pybind11
 
 # ============================================================
-# Environment
-# ============================================================
-ENV CUDA_HOME=/usr/local/cuda
-ENV PATH=${CUDA_HOME}/bin:${PATH}
-ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
-
-ENV TVM_HOME=/mlc-llm/3rdparty/tvm
-ENV PYTHONPATH=/mlc-llm/3rdparty/tvm/python
-ENV LD_LIBRARY_PATH=/mlc-llm/3rdparty/tvm/build:${LD_LIBRARY_PATH}
-
-# ============================================================
 # Workspace
 # ============================================================
 WORKDIR /mlc-llm
 COPY . /mlc-llm
 
 # ============================================================
-# Build TVM (CI-safe: CUDA OFF by default)
+# Build TVM (CPU-only, CI-safe)
 # ============================================================
-ARG USE_CUDA=OFF
-
 RUN cd 3rdparty/tvm && \
     mkdir -p build && \
     cd build && \
     cmake .. \
       -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
-      -DUSE_CUDA=${USE_CUDA} \
+      -DUSE_CUDA=OFF \
       -DUSE_CUDNN=OFF \
       -DUSE_CUTLASS=OFF \
       -DUSE_FLASH_ATTENTION=OFF \
@@ -86,16 +73,33 @@ RUN cd 3rdparty/tvm && \
     ninja
 
 # ============================================================
-# Install TVM Python (editable, matches built runtime)
+# 🔑 REGISTER TVM RUNTIME (CRITICAL FIX)
+# ============================================================
+RUN echo "/mlc-llm/3rdparty/tvm/build" > /etc/ld.so.conf.d/tvm.conf && ldconfig
+
+# ============================================================
+# Install TVM Python
 # ============================================================
 RUN cd 3rdparty/tvm/python && pip3 install -e .
 
 # ============================================================
-# Sanity Check (TVM only)
+# Build & Install MLC-LLM Python
+# ============================================================
+RUN cd python && \
+    python3 setup.py bdist_wheel && \
+    pip3 install --no-deps dist/*.whl
+
+# ============================================================
+# Validation (FAIL FAST)
 # ============================================================
 RUN python3 - <<'EOF'
 import tvm
+import mlc_llm
 print("TVM OK:", tvm.__version__)
+print("MLC LLM OK")
 EOF
 
+# ============================================================
+# Default
+# ============================================================
 CMD ["/bin/bash"]
