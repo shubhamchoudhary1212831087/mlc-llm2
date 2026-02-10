@@ -1,26 +1,22 @@
 # ============================================================
-# Base Image (CUDA toolkit present, driver not required)
+# Base Image
 # ============================================================
 FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 # ============================================================
-# Install Base + Vulkan Repo
+# Add Vulkan SDK Repo
 # ============================================================
 RUN apt-get update && \
-    apt-get install -y \
-        wget \
-        gnupg \
-        ca-certificates \
-        software-properties-common && \
+    apt-get install -y wget gnupg ca-certificates software-properties-common && \
     wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | apt-key add - && \
     wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list \
         https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list && \
     apt-get update
 
 # ============================================================
-# Build Dependencies (LLVM INCLUDED)
+# System + Build Dependencies
 # ============================================================
 RUN apt-get install -y \
         build-essential \
@@ -30,15 +26,16 @@ RUN apt-get install -y \
         python3-pip \
         python3-setuptools \
         vulkan-sdk \
-        llvm-dev \
-        libllvm-dev \
-        clang \
+        llvm-14 \
+        llvm-14-dev \
+        clang-14 \
         curl \
         ninja-build && \
+    ln -s /usr/bin/llvm-config-14 /usr/bin/llvm-config && \
     rm -rf /var/lib/apt/lists/*
 
 # ============================================================
-# Install Rust
+# Rust Toolchain
 # ============================================================
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
