@@ -20,7 +20,6 @@ jobs:
       contents: read
       packages: write
     outputs:
-      # We export the exact tag we built so the next job can use it
       docker_image: ${{ steps.set-tag.outputs.image }}
     steps:
       - name: Checkout repository
@@ -36,17 +35,9 @@ jobs:
       - name: Define and Output Image Tag
         id: set-tag
         run: |
-          # 1. Lowercase the repository name (Docker requirement)
           REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          
-          # 2. Create a single, specific tag using the Commit SHA
           IMAGE_TAG="ghcr.io/$REPO:${{ github.sha }}"
-          
-          # 3. Save it to GITHUB_OUTPUT so the next job can see it
           echo "image=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
-          
-          # 4. Print for debugging
-          echo "Generated Tag: $IMAGE_TAG"
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -54,7 +45,6 @@ jobs:
           context: .
           file: docker/Dockerfile
           push: true
-          # Use the exact tag we just defined
           tags: ${{ steps.set-tag.outputs.image }}
 
   # ==========================================
@@ -63,20 +53,20 @@ jobs:
   build-linux:
     needs: build-docker
     runs-on: ubuntu-latest
-    # FIX: Use the 'needs' context, which IS available here
     container:
       image: ${{ needs.build-docker.outputs.docker_image }}
-      options: --user root # Ensure we have permissions inside the container
+      options: --user root
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Configure (Gen CMake Config)
+      - name: Configure (Fix Interactive Prompt)
         run: |
           mkdir -p build && cd build
-          python3 ../cmake/gen_cmake_config.py
+          # FIX: Pipe the TVM path into the script to bypass the interactive prompt
+          echo "../3rdparty/tvm" | python3 ../cmake/gen_cmake_config.py
           cmake .. -DTVM_HOME=../3rdparty/tvm
 
       - name: Build Libraries (C++)
@@ -95,11 +85,11 @@ jobs:
 
       - name: Install & Test (Validation)
         run: |
-          # Install TVM bindings first
+          # Install TVM bindings
           cd 3rdparty/tvm/python
           pip3 install .
           
-          # Install the wheel we just built
+          # Install wheel
           cd ../../../python
           pip3 install dist/*.whl
           
@@ -136,7 +126,7 @@ jobs:
         shell: cmd
         run: |
           mkdir build && cd build
-          python ..\cmake\gen_cmake_config.py
+          echo ..\3rdparty\tvm | python ..\cmake\gen_cmake_config.py
           cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
 
       - name: Build Libraries (C++)
@@ -153,22 +143,30 @@ jobs:
           python setup.py bdist_wheel
 
       - name: Install & Test (Validation)
-        shell: cmd
+        # FIX: Switch to PowerShell for better error handling and wildcard support
+        shell: powershell 
         run: |
-          :: Add DLLs to PATH
-          set PATH=%GITHUB_WORKSPACE%\build\Release;%PATH%
+          # 1. Add DLLs to PATH so Python can find them
+          $env:PATH += ";$env:GITHUB_WORKSPACE\build\Release"
           
-          :: Install TVM bindings
-          cd 3rdparty\tvm\python
+          # 2. Install TVM Core
+          Set-Location 3rdparty\tvm\python
           pip install .
           
-          :: Install wheel (ignoring strict deps to pass validation)
-          cd ..\..\..\python
-          pip install --no-deps dist\*.whl
+          # 3. FIX: Install missing TVM FFI dependency
+          pip install apache-tvm-ffi
+          
+          # 4. Install the MLC-LLM wheel
+          Set-Location ..\..\..\python
+          # PowerShell way to pass the wildcard filename to pip
+          $wheel = Get-ChildItem dist\*.whl | Select-Object -First 1
+          pip install --no-deps $wheel.FullName
+          
+          # 5. Manually install runtime deps (avoiding flashinfer build issues)
           pip install numpy decorator scipy psutil typing-extensions
-
-          :: Verify
-          python -c "import mlc_llm; print(mlc_llm)"
+          
+          # 6. Validation
+          python -c "import mlc_llm; print('MLC Imported Successfully')"
           mlc_llm chat -h
 
       - name: Upload Artifact
