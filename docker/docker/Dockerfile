@@ -1,78 +1,27 @@
-# ============================================================
-# Base Image
-# ============================================================
-FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
-
-ENV DEBIAN_FRONTEND=noninteractive
-
-# ============================================================
-# Add Vulkan SDK Repo
-# ============================================================
-RUN apt-get update && \
-    apt-get install -y wget gnupg ca-certificates software-properties-common && \
-    wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | apt-key add - && \
-    wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list \
-        https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list && \
-    apt-get update
-
-# ============================================================
-# System + Build Dependencies (LLVM FIXED)
-# ============================================================
-RUN apt-get install -y \
-        build-essential \
-        cmake \
-        git \
-        python3-dev \
-        python3-pip \
-        python3-setuptools \
-        vulkan-sdk \
-        llvm-14 \
-        llvm-14-dev \
-        clang-14 \
-        curl \
-        ninja-build && \
-    ln -s /usr/bin/llvm-config-14 /usr/bin/llvm-config && \
-    rm -rf /var/lib/apt/lists/*
-
-# ============================================================
-# Rust Toolchain
-# ============================================================
-ENV RUSTUP_HOME=/usr/local/rustup \
-    CARGO_HOME=/usr/local/cargo \
-    PATH=/usr/local/cargo/bin:$PATH
-
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-    | sh -s -- -y
-
-# ============================================================
-# Python Dependencies
-# ============================================================
-RUN pip3 install --no-cache-dir --upgrade pip && \
-    pip3 install --no-cache-dir \
-        numpy \
-        decorator \
-        scipy \
-        tornado \
-        psutil \
-        xgboost \
-        cloudpickle \
-        attrs \
-        typing-extensions \
-        pybind11
-
-# ============================================================
-# CUDA Path Safety
-# ============================================================
-ENV PATH=/usr/local/cuda/bin:${PATH}
-ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs:${LD_LIBRARY_PATH}
-
-# ============================================================
-# Entrypoint
-# ============================================================
-COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
-
-WORKDIR /mlc-llm
-
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["/bin/bash"]
+Run # Safety Check: Ensure Rust is actually working
+  # Safety Check: Ensure Rust is actually working
+  if ! command -v cargo &> /dev/null; then
+     echo "❌ CRITICAL ERROR: Cargo not found. Docker build failed to install Rust."
+     exit 1
+  fi
+  echo "✅ Cargo version: $(cargo --version)"
+  
+  mkdir -p build && cd build
+  
+  # Exact flags from your Golden Reference
+  cmake .. \
+    -DUSE_CUDA=ON \
+    -DUSE_CUBLAS=ON \
+    -DUSE_CUTLASS=ON \
+    -DUSE_THRUST=OFF \
+    -DCMAKE_CUDA_ARCHITECTURES="80;86"
+    
+  make -j$(nproc)
+  
+  echo "✅ MLC Build Complete."
+  shell: sh -e {0}
+  env:
+    REGISTRY: ghcr.io
+❌ CRITICAL ERROR: Cargo not found. Docker build failed to install Rust.
+/usr/local/cargo/bin/cargo
+Error: Process completed with exit code 1.
