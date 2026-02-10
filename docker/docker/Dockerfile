@@ -98,12 +98,8 @@ RUN cd python && \
 # ============================================================
 # Validation (THIS IS CRITICAL)
 # ============================================================
-RUN python3 - << 'EOF'
-import tvm
-import mlc_llm
-print("TVM OK:", tvm.__version__)
-print("MLC LLM OK")
-EOF
+RUN python3 -c "import tvm, mlc_llm; print('TVM OK:', tvm.__version__); print('MLC LLM OK')"
+
 
 # ============================================================
 # Default Entry
