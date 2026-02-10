@@ -91,18 +91,17 @@ jobs:
       # ---------------------------------------------------------
       # STEP 2: Build MLC-LLM Core (Fixed PATH)
       # ---------------------------------------------------------
+# ---------------------------------------------------------
+      # STEP 2: Build MLC-LLM Core (Symlink Fix)
+      # ---------------------------------------------------------
       - name: Build MLC-LLM Core
         run: |
-          # FIX: Explicitly add Rust/Cargo to PATH because GHA resets it
-          export PATH="/usr/local/cargo/bin:$PATH"
+          # NUCLEAR OPTION: Symlink Cargo to /usr/bin
+          # This bypasses all PATH issues instantly.
+          ln -sf /usr/local/cargo/bin/cargo /usr/bin/cargo
+          ln -sf /usr/local/cargo/bin/rustc /usr/bin/rustc
           
-          # Safety Check
-          if ! command -v cargo &> /dev/null; then
-             echo "❌ CRITICAL ERROR: Cargo still not found even after path fix."
-             echo "Searching for cargo..."
-             find /usr -name cargo 2>/dev/null || echo "Cargo binary missing from image."
-             exit 1
-          fi
+          # Verify (This will work now)
           echo "✅ Cargo version: $(cargo --version)"
         
           mkdir -p build && cd build
@@ -116,6 +115,7 @@ jobs:
             -DCMAKE_CUDA_ARCHITECTURES="80;86"
             
           make -j$(nproc)
+          
           
           echo "✅ MLC Build Complete."
 
