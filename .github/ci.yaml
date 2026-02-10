@@ -1,4 +1,4 @@
-name: MLC-LLM Production Pipeline
+name: cicd2
 
 on:
   push:
