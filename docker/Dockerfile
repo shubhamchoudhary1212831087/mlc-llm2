@@ -4,15 +4,14 @@ FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
 # Avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. Update and Enable Universe (Required for SPIRV tools)
+# 1. Update and Enable Universe (Ensures tools are found)
 RUN apt-get update && \
     apt-get install -y software-properties-common && \
     add-apt-repository universe && \
     apt-get update
 
 # 2. Install System Dependencies
-# FIX: Removed 'spirv-headers' (does not exist in apt)
-# KEPT: 'libspirv-tools-dev' and 'spirv-tools' (exist in universe)
+# NOTE: strict package list that exists in Ubuntu 22.04
 RUN apt-get install -y \
     build-essential \
     cmake \
@@ -24,7 +23,6 @@ RUN apt-get install -y \
     vulkan-tools \
     spirv-tools \
     glslang-tools \
-    libspirv-tools-dev \
     curl \
     ca-certificates \
     ninja-build \
