@@ -1,0 +1,187 @@
+name: MLC-LLM Production Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  REGISTRY: ghcr.io
+  # Image name: owner/repo-name
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ==========================================
+  # JOB 1: Build & Publish Docker Image
+  # ==========================================
+  build-docker:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_uri: ${{ steps.meta.outputs.tags }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,format=long
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  # ==========================================
+  # JOB 2: Linux Build (Inside Docker)
+  # ==========================================
+  build-linux:
+    needs: build-docker
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.build-docker.outputs.image_uri }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure (Gen CMake Config)
+        run: |
+          mkdir -p build && cd build
+          python3 ../cmake/gen_cmake_config.py
+          # Force TVM path to ensure it uses the submodule
+          cmake .. -DTVM_HOME=../3rdparty/tvm
+
+      - name: Build Libraries (C++)
+        run: |
+          cd build
+          make -j$(nproc)
+
+      - name: Validate Shared Libraries
+        run: |
+          echo "Checking for compiled artifacts..."
+          ls -lh build/libmlc_llm.so build/libtvm_runtime.so
+
+      - name: Build Python Wheel
+        run: |
+          cd python
+          python3 setup.py bdist_wheel
+
+      - name: Install & Test (Validation)
+        run: |
+          cd python
+          pip3 install dist/*.whl
+          
+          echo ">>> Validating Import"
+          python3 -c "import mlc_llm; print('Success! Installed at:', mlc_llm.__path__)"
+          
+          echo ">>> Validating CLI"
+          mlc_llm chat -h
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-wheels
+          path: python/dist/*.whl
+
+  # ==========================================
+  # JOB 3: Windows Build (Native)
+  # ==========================================
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust (for Tokenizers)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Configure (Gen CMake Config)
+        shell: cmd
+        run: |
+          mkdir build && cd build
+          python ..\cmake\gen_cmake_config.py
+          cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Libraries (C++)
+        shell: cmd
+        run: |
+          cd build
+          cmake --build . --config Release --parallel
+
+      - name: Validate Shared Libraries
+        shell: powershell
+        run: |
+          if (Test-Path "build/Release/mlc_llm.dll") { Write-Host "DLL Found" } else { exit 1 }
+
+      - name: Build Python Wheel
+        shell: cmd
+        run: |
+          pip install setuptools wheel
+          cd python
+          python setup.py bdist_wheel
+
+      - name: Install & Test (Validation)
+        shell: cmd
+        run: |
+          cd python
+          pip install .
+          mlc_llm chat -h
+          python -c "import mlc_llm; print(mlc_llm)"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-wheels
+          path: python/dist/*.whl
+
+  # ==========================================
+  # JOB 4: Release (Only on Tag)
+  # ==========================================
+  release:
+    needs: [build-linux, build-windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/*.whl
+          generate_release_notes: true
