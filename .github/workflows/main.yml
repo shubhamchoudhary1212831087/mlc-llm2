@@ -6,7 +6,6 @@ on:
     tags: [ "v*" ]
   pull_request:
     branches: [ "main" ]
-  workflow_dispatch: 
 
 env:
   REGISTRY: ghcr.io
@@ -23,15 +22,11 @@ jobs:
     outputs:
       docker_image: ${{ steps.set-tag.outputs.image }}
     steps:
-      - name: Free Disk Space (Ubuntu)
+      - name: Free Disk Space
         uses: jlumbroso/free-disk-space@main
         with:
           tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
           large-packages: true
-          swap-storage: false
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -43,7 +38,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Define and Output Image Tag
+      - name: Define Image Tag
         id: set-tag
         run: |
           REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
@@ -54,7 +49,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: docker/docker/Dockerfile
+          file: docker/Dockerfile
           push: true
           tags: ${{ steps.set-tag.outputs.image }}
 
@@ -74,15 +69,14 @@ jobs:
           submodules: recursive
 
       # ---------------------------------------------------------
-      # STEP 1: Build TVM (With CUDA Support)
+      # STEP 1: Build TVM
       # ---------------------------------------------------------
-      - name: Build TVM (Explicit Configuration)
+      - name: Build TVM
         run: |
           cd 3rdparty/tvm
           mkdir -p build && cd build
           
-          # We use generic CUDA archs to ensure compatibility
-          # We enable CUDA=ON even on CPU runner (Compilation works fine)
+          # Exact flags from your Golden Reference
           cmake .. \
             -DUSE_CUDA=ON \
             -DUSE_CUBLAS=ON \
@@ -92,16 +86,23 @@ jobs:
             
           make -j$(nproc)
           
-          echo "✅ TVM Build Complete. Verifying files:"
-          ls -lh libtvm.so libtvm_runtime.so
+          echo "✅ TVM Build Complete."
 
       # ---------------------------------------------------------
       # STEP 2: Build MLC-LLM Core
       # ---------------------------------------------------------
       - name: Build MLC-LLM Core
         run: |
+          # Safety Check: Ensure Rust is actually working
+          if ! command -v cargo &> /dev/null; then
+             echo "❌ CRITICAL ERROR: Cargo not found. Docker build failed to install Rust."
+             exit 1
+          fi
+          echo "✅ Cargo version: $(cargo --version)"
+        
           mkdir -p build && cd build
           
+          # Exact flags from your Golden Reference
           cmake .. \
             -DUSE_CUDA=ON \
             -DUSE_CUBLAS=ON \
@@ -111,41 +112,27 @@ jobs:
             
           make -j$(nproc)
           
-          echo "✅ MLC Build Complete. Verifying files:"
-          ls -lh libmlc_llm.so
+          echo "✅ MLC Build Complete."
 
       # ---------------------------------------------------------
-      # STEP 3: Install & Validate (CPU-Safe Mode)
+      # STEP 3: Install & Validate
       # ---------------------------------------------------------
       - name: Install & Validate
         run: |
-          # 1. Install MLC Python Package
           pip3 install -e python
           
-          # 2. SETUP ENVIRONMENT VARIABLES (Using Relative Paths)
-          # Use $(pwd) to get the internal container path, not the runner path
+          # Setup Environment Variables (Using relative paths for safety)
           export TVM_HOME=$(pwd)/3rdparty/tvm
           export TVM_LIBRARY_PATH=$TVM_HOME/build
           
-          # CRITICAL FOR CPU RUNNER:
-          # We include 'stubs' because the runner has no GPU driver.
-          # This allows the linker to find libcuda.so without crashing.
+          # CRITICAL: Include CUDA stubs so linker doesn't crash on CPU runner
           export LD_LIBRARY_PATH=$(pwd)/build:$TVM_LIBRARY_PATH:/usr/local/cuda/lib64/stubs:$LD_LIBRARY_PATH
           export PYTHONPATH=$(pwd)/python:$TVM_HOME/python:$PYTHONPATH
           
-          echo "========================================"
-          echo "Environment Configured:"
-          echo "TVM_HOME=$TVM_HOME"
-          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
-          echo "========================================"
-          
-          # 3. Validation
-          # We only run '--help' which verifies the binary loads
-          # We DO NOT run 'chat' or full import tests as they require a GPU
-          echo "Running CLI Help Check..."
+          echo "Running CLI Help Check (No GPU required)..."
           mlc_llm chat -h
           
-          echo "✅ Validation Passed (Binary is loadable)"
+          echo "✅ Validation Passed"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -155,7 +142,7 @@ jobs:
           if-no-files-found: ignore
 
   # ==========================================
-  # JOB 3: Windows Build (Native)
+  # JOB 3: Windows Build (Native) - Unchanged
   # ==========================================
   build-windows:
     runs-on: windows-latest
