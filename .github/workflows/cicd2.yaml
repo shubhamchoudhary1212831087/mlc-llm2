@@ -51,7 +51,7 @@ jobs:
           tags: ${{ steps.set-tag.outputs.image }}
 
 # ==========================================================
-# JOB 2 — Linux Build
+# JOB 2 — Linux Build & Validation
 # ==========================================================
   build-linux:
     needs: build-docker
@@ -67,7 +67,9 @@ jobs:
         with:
           submodules: recursive
 
-# ---------- Configure ----------
+# ----------------------------------------------------------
+# Configure Build
+# ----------------------------------------------------------
       - name: Configure CMake
         run: |
           mkdir -p build && cd build
@@ -82,34 +84,46 @@ jobs:
 
           cmake ..
 
-# ---------- Build ----------
+# ----------------------------------------------------------
+# Compile
+# ----------------------------------------------------------
       - name: Build Libraries
         run: |
           cd build
           make -j$(nproc)
 
-# ---------- Validate ----------
+# ----------------------------------------------------------
+# Validate Core Library
+# ----------------------------------------------------------
       - name: Validate libmlc_llm
         run: |
           test -f build/libmlc_llm.so || (echo "Missing libmlc_llm.so" && exit 1)
 
-# ---------- Wheel ----------
+# ----------------------------------------------------------
+# Build Python Wheel
+# ----------------------------------------------------------
       - name: Build Python Wheel
         run: |
           cd python
           python3 setup.py bdist_wheel
 
-# ---------- Install + Runtime Validation ----------
+# ----------------------------------------------------------
+# Install & Runtime Validation
+# ----------------------------------------------------------
       - name: Install & Validate
         run: |
-          pip3 install apache-tvm-ffi
-
+          echo "Installing TVM Python (editable)..."
           cd 3rdparty/tvm/python
           pip3 install -e .
 
+          echo "Installing MLC wheel..."
           cd ../../../python
           pip3 install --no-deps dist/*.whl
           pip3 install numpy decorator scipy psutil typing-extensions attrs
+
+          echo "-----------------------------------------"
+          echo " Locating TVM runtime"
+          echo "-----------------------------------------"
 
           TVM_LIB=$(find $GITHUB_WORKSPACE -name "libtvm_runtime.so" | head -n 1 || true)
 
@@ -118,17 +132,32 @@ jobs:
           fi
 
           if [ -z "$TVM_LIB" ]; then
-            echo "No TVM runtime found"
+            echo "ERROR: No TVM runtime library found"
             exit 1
           fi
 
           export TVM_LIBRARY_PATH=$(dirname $TVM_LIB)
           export LD_LIBRARY_PATH=$TVM_LIBRARY_PATH:$LD_LIBRARY_PATH
 
-          python3 -c "import mlc_llm; print('Import OK:', mlc_llm.__path__)"
+          echo "Using runtime at:"
+          echo "$TVM_LIBRARY_PATH"
+
+          echo "-----------------------------------------"
+          echo " Import Tests"
+          echo "-----------------------------------------"
+
+          python3 -c "import tvm; print('TVM OK')"
+          python3 -c "import mlc_llm; print('MLC OK:', mlc_llm.__path__)"
+
+          echo "-----------------------------------------"
+          echo " CLI Test"
+          echo "-----------------------------------------"
+
           mlc_llm chat -h
 
-# ---------- Artifact ----------
+# ----------------------------------------------------------
+# Upload Artifact
+# ----------------------------------------------------------
       - name: Upload Wheels
         uses: actions/upload-artifact@v4
         with:
