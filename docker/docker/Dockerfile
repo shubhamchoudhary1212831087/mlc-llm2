@@ -1,12 +1,9 @@
-# ============================================================
-# Base Image (CUDA headers allowed, no GPU required at build)
-# ============================================================
 FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 # ============================================================
-# System Dependencies
+# System + TVM Native Dependencies
 # ============================================================
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -19,6 +16,7 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     python3-pip \
     python3-setuptools \
+    python3-distutils \
     ninja-build \
     llvm-14 \
     llvm-14-dev \
@@ -27,9 +25,12 @@ RUN apt-get update && apt-get install -y \
     libxml2-dev \
     zlib1g-dev \
     libzstd-dev \
+    libffi-dev \
+    libtinfo5 \
+    libomp-14-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# TVM expects llvm-config
+# llvm-config for TVM
 RUN ln -sf /usr/bin/llvm-config-14 /usr/bin/llvm-config
 
 # ============================================================
@@ -64,7 +65,7 @@ WORKDIR /mlc-llm
 COPY . /mlc-llm
 
 # ============================================================
-# Build TVM (CI SAFE)
+# Build TVM (CPU-only, CI-safe)
 # ============================================================
 ARG USE_CUDA=OFF
 
@@ -75,11 +76,11 @@ RUN cd 3rdparty/tvm && \
       -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
       -DUSE_CUDA=${USE_CUDA} \
+      -DUSE_LLVM=ON \
+      -DLLVM_DIR=/usr/lib/llvm-14/lib/cmake/llvm \
       -DUSE_CUDNN=OFF \
       -DUSE_CUTLASS=OFF \
       -DUSE_FLASH_ATTENTION=OFF \
-      -DUSE_LLVM=ON \
-      -DLLVM_DIR=/usr/lib/llvm-14/lib/cmake/llvm \
       -DTVM_BUILD_TESTS=OFF \
       -DTVM_BUILD_EXAMPLES=OFF \
       -DTVM_BUILD_TUTORIALS=OFF && \
