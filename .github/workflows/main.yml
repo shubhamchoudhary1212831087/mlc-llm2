@@ -22,7 +22,7 @@ jobs:
     outputs:
       docker_image: ${{ steps.set-tag.outputs.image }}
     steps:
-      # FIX 1: Maximize Disk Space before building the huge Docker image
+      # FIX: Free up disk space to prevent "No space left on device"
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
         with:
@@ -94,12 +94,17 @@ jobs:
 
       - name: Validate Shared Libraries
         run: |
-          if [ -f "build/libmlc_llm.so" ]; then
-            echo "SUCCESS: Found libmlc_llm.so"
-          else
+          # Verify files exist, finding them wherever they might be
+          LIB_MLC=$(find build -name "libmlc_llm.so" -print -quit)
+          LIB_TVM=$(find build -name "libtvm_runtime.so" -print -quit)
+          
+          if [ -z "$LIB_MLC" ]; then
             echo "ERROR: libmlc_llm.so missing!"
             exit 1
           fi
+          
+          echo "Found libraries:"
+          ls -lh "$LIB_MLC" "$LIB_TVM" || echo "TVM runtime might be static or missing"
 
       - name: Build Python Wheel
         run: |
@@ -108,7 +113,7 @@ jobs:
 
       - name: Install & Test (Validation)
         run: |
-          # 1. FIX: Install missing FFI dependency explicitly
+          # 1. Install missing FFI dependency
           pip3 install apache-tvm-ffi
           
           # 2. Install TVM bindings
@@ -119,10 +124,23 @@ jobs:
           cd ../../../python
           pip3 install --no-deps dist/*.whl
           
-          # 4. Manually install small deps
+          # 4. Install small deps
           pip3 install numpy decorator scipy psutil typing-extensions attrs
           
           # 5. Validate
+          # CRITICAL FIX: Locate the directory containing the compiled .so files
+          # and export it so Python can find them.
+          BUILD_DIR=$(pwd)/build
+          # Try to find specific subdir if it exists, otherwise default to build/
+          TVM_LIB_FILE=$(find build -name "libtvm_runtime.so" -print -quit)
+          if [ -n "$TVM_LIB_FILE" ]; then
+             BUILD_DIR=$(dirname "$TVM_LIB_FILE")
+          fi
+          
+          echo "Exporting Library Path: $BUILD_DIR"
+          export TVM_LIBRARY_PATH=$BUILD_DIR
+          export LD_LIBRARY_PATH=$BUILD_DIR:$LD_LIBRARY_PATH
+          
           python3 -c "import mlc_llm; print('Success! Installed at:', mlc_llm.__path__)"
           mlc_llm chat -h
 
@@ -176,7 +194,12 @@ jobs:
       - name: Install & Test (Validation)
         shell: powershell 
         run: |
-          $env:PATH += ";$env:GITHUB_WORKSPACE\build\Release"
+          # CRITICAL FIX: Add Build/Release to PATH and TVM_LIBRARY_PATH
+          $BuildDir = "$env:GITHUB_WORKSPACE\build\Release"
+          $env:PATH += ";$BuildDir"
+          $env:TVM_LIBRARY_PATH = $BuildDir
+          
+          Write-Host "Library Path set to: $BuildDir"
           
           Set-Location 3rdparty\tvm\python
           pip install .
@@ -184,7 +207,6 @@ jobs:
           
           Set-Location ..\..\..\python
           $wheel = Get-ChildItem dist\*.whl | Select-Object -First 1
-          # FIX: Use --no-deps here too to save Windows runner space/time
           pip install --no-deps $wheel.FullName
           pip install numpy decorator scipy psutil typing-extensions
           
