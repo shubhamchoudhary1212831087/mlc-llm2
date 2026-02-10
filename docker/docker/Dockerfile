@@ -79,9 +79,11 @@ RUN cd 3rdparty/tvm && \
       -DUSE_CUDA=ON \
       -DUSE_CUDNN=OFF \
       -DUSE_LLVM=ON \
+      -DLLVM_DIR=/usr/lib/llvm-14/lib/cmake/llvm \
       -DUSE_GRAPH_EXECUTOR=ON \
       -DUSE_RELAY_DEBUG=ON && \
     make -j$(nproc)
+ 
 
 # ============================================================
 # Install TVM Python (editable, uses built runtime)
