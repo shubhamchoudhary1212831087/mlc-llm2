@@ -51,7 +51,7 @@ jobs:
           tags: ${{ steps.set-tag.outputs.image }}
 
 # ==========================================================
-# JOB 2 — Linux Build & Validation
+# JOB 2 — Linux Build
 # ==========================================================
   build-linux:
     needs: build-docker
@@ -68,36 +68,38 @@ jobs:
           submodules: recursive
 
 # ----------------------------------------------------------
-# Configure Build
+# Configure & Build (MLC + TVM)
 # ----------------------------------------------------------
-      - name: Configure CMake
+      - name: Configure & Build
         run: |
+          echo "Building MLC + TVM..."
+
           mkdir -p build && cd build
 
           echo "set(TVM_HOME ../3rdparty/tvm)" > config.cmake
           echo "set(USE_CUDA OFF)" >> config.cmake
           echo "set(USE_VULKAN ON)" >> config.cmake
           echo "set(USE_LLVM ON)" >> config.cmake
-          echo "set(USE_RELAX ON)" >> config.cmake
-          echo "set(USE_GRAPH_EXECUTOR ON)" >> config.cmake
-          echo "set(USE_PROFILER ON)" >> config.cmake
 
           cmake ..
+          make -j$(nproc)
 
-# ----------------------------------------------------------
-# Compile
-# ----------------------------------------------------------
-      - name: Build Libraries
-        run: |
-          cd build
+          echo "Building TVM runtime in-place..."
+
+          cd ../3rdparty/tvm
+          mkdir -p build && cd build
+
+          cp ../../../build/config.cmake .
+
+          cmake ..
           make -j$(nproc)
 
 # ----------------------------------------------------------
-# Validate Core Library
+# Validate Runtime Exists
 # ----------------------------------------------------------
-      - name: Validate libmlc_llm
+      - name: Validate TVM Runtime
         run: |
-          test -f build/libmlc_llm.so || (echo "Missing libmlc_llm.so" && exit 1)
+          ls -lh 3rdparty/tvm/build/libtvm*.so
 
 # ----------------------------------------------------------
 # Build Python Wheel
@@ -108,50 +110,36 @@ jobs:
           python3 setup.py bdist_wheel
 
 # ----------------------------------------------------------
-# Install & Runtime Validation
+# Install & Validate
 # ----------------------------------------------------------
       - name: Install & Validate
         run: |
-          echo "Installing TVM Python (editable)..."
+          echo "Installing vendored TVM Python..."
+
           cd 3rdparty/tvm/python
           pip3 install -e .
 
           echo "Installing MLC wheel..."
+
           cd ../../../python
           pip3 install --no-deps dist/*.whl
           pip3 install numpy decorator scipy psutil typing-extensions attrs
 
-          echo "-----------------------------------------"
-          echo " Locating TVM runtime"
-          echo "-----------------------------------------"
-
-          TVM_LIB=$(find $GITHUB_WORKSPACE -name "libtvm_runtime.so" | head -n 1 || true)
-
-          if [ -z "$TVM_LIB" ]; then
-            TVM_LIB=$(find $GITHUB_WORKSPACE -name "libtvm.so" | head -n 1 || true)
-          fi
-
-          if [ -z "$TVM_LIB" ]; then
-            echo "ERROR: No TVM runtime library found"
-            exit 1
-          fi
-
-          export TVM_LIBRARY_PATH=$(dirname $TVM_LIB)
+          export TVM_LIBRARY_PATH=$GITHUB_WORKSPACE/3rdparty/tvm/build
           export LD_LIBRARY_PATH=$TVM_LIBRARY_PATH:$LD_LIBRARY_PATH
 
-          echo "Using runtime at:"
-          echo "$TVM_LIBRARY_PATH"
+          echo "Runtime path: $TVM_LIBRARY_PATH"
 
-          echo "-----------------------------------------"
+          echo "---------------------------------"
           echo " Import Tests"
-          echo "-----------------------------------------"
+          echo "---------------------------------"
 
-          python3 -c "import tvm; print('TVM OK')"
+          python3 -c "import tvm; print('TVM OK:', tvm.__file__)"
           python3 -c "import mlc_llm; print('MLC OK:', mlc_llm.__path__)"
 
-          echo "-----------------------------------------"
+          echo "---------------------------------"
           echo " CLI Test"
-          echo "-----------------------------------------"
+          echo "---------------------------------"
 
           mlc_llm chat -h
 
