@@ -55,8 +55,10 @@ ENV PATH=${CUDA_HOME}/bin:${PATH}
 ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
 
 ENV TVM_HOME=/mlc-llm/3rdparty/tvm
-ENV PYTHONPATH=${TVM_HOME}/python:${PYTHONPATH}
+#ENV PYTHONPATH=${TVM_HOME}/python:${PYTHONPATH}
 ENV LD_LIBRARY_PATH=/mlc-llm/build:${LD_LIBRARY_PATH}
+ENV PYTHONPATH=""
+ENV PYTHONPATH=/mlc-llm/3rdparty/tvm/python:${PYTHONPATH}
 
 # ============================================================
 # Workspace
