@@ -1,11 +1,11 @@
-name: New
+name: MLC-LLM Production CI/CD
 
 on:
   push:
     branches: [ main ]
     tags: [ 'v*' ]
   pull_request:
-  workflow_dispatch: 
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -13,33 +13,36 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  # Docker tags must be lowercase. We handle this in the login step.
-  IMAGE_NAME: ${{ github.repository }}/mlc-env
+  # We use repository_owner to ensure the image name is lowercase (Docker requirement)
+  IMAGE_NAME: ${{ github.repository_owner }}/mlc-env
 
 jobs:
+  # =========================================================
   # 1. Build Environment Image
+  # =========================================================
   setup-env:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Build and Push
+
+      - name: Build and Push Docker Image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: .devops/Dockerfile
           push: true
-          # We use lowercase image name for Docker compliance
-          tags: ${{ env.REGISTRY }}/${{ github.repository_owner }}/mlc-env:latest
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
+  # =========================================================
   # 2. Parallel Cross-Platform Build
+  # =========================================================
   build:
     needs: setup-env
     strategy:
@@ -51,8 +54,8 @@ jobs:
         with:
           submodules: recursive
 
-      # Required to pull the image in the build job
-      - name: Log in to GHCR
+      # --- LINUX SPECIFIC STEPS ---
+      - name: Log in to GHCR (Linux Only)
         if: matrix.os == 'ubuntu-latest'
         uses: docker/login-action@v3
         with:
@@ -60,46 +63,60 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Linux Build (via Docker)
-      - name: Linux Build
+      - name: Linux Build (Dockerized)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          # Pulling the image we just built
-          docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/mlc-env:latest
-          docker run --rm -v $PWD:/workspace ${{ env.REGISTRY }}/${{ github.repository_owner }}/mlc-env:latest \
+          # Pull the fresh image to ensure we use the latest build tools
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          
+          # Run the build script inside the container
+          docker run --rm -v $PWD:/workspace ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
           bash -c "build-mlc && validate-mlc"
 
-      # Windows Build (Native)
-      - name: Windows Build
+      # --- WINDOWS SPECIFIC STEPS ---
+      - name: Setup Python (Windows Only)
+        if: matrix.os == 'windows-latest'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Setup MSVC (Windows Only)
         if: matrix.os == 'windows-latest'
         uses: ilammy/msvc-dev-cmd@v1
-        
+
       - name: Build Windows Wheel
         if: matrix.os == 'windows-latest'
         shell: bash
         run: |
           mkdir -p build && cd build
-          python ../cmake/gen_cmake_config.py <<EOF
-          n
-          n
-          n
-          n
-          n
-          n
-          EOF
+          
+          # Manually write config to avoid interactive prompt failure
+          echo "set(TVM_SOURCE_DIR ../3rdparty/tvm)" > config.cmake
+          echo "set(CMAKE_BUILD_TYPE RelWithDebInfo)" >> config.cmake
+          echo "set(USE_CUDA OFF)" >> config.cmake
+          echo "set(USE_VULKAN OFF)" >> config.cmake
+          echo "set(USE_METAL OFF)" >> config.cmake
+          echo "set(USE_OPENCL OFF)" >> config.cmake
+
+          # Configure and Build
           cmake .. -A x64
           cmake --build . --config Release --parallel 
+          
+          # Package
           cd ../python
           pip install build wheel
           python -m build --wheel
 
+      # --- COMMON STEPS ---
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}
           path: python/dist/*.whl
 
+  # =========================================================
   # 3. Release Stage
+  # =========================================================
   release:
     needs: build
     if: startsWith(github.ref, 'refs/tags/')
@@ -108,8 +125,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
-          
-      - name: Create Release
+          merge-multiple: true
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/**/*.whl
+          files: dist/*.whl
