@@ -1,6 +1,3 @@
-# ============================================================
-# Base Image (CUDA + Ubuntu)
-# ============================================================
 FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -27,9 +24,9 @@ RUN apt-get update && apt-get install -y \
     libedit-dev \
     libxml2-dev \
     zlib1g-dev \
+    libzstd-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# LLVM config symlink (TVM expects llvm-config)
 RUN ln -s /usr/bin/llvm-config-14 /usr/bin/llvm-config
 
 # ============================================================
@@ -48,30 +45,25 @@ RUN pip3 install --upgrade pip && \
         pybind11
 
 # ============================================================
-# Environment Variables
+# Environment
 # ============================================================
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=${CUDA_HOME}/bin:${PATH}
 ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
 
 ENV TVM_HOME=/mlc-llm/3rdparty/tvm
-#ENV PYTHONPATH=${TVM_HOME}/python:${PYTHONPATH}
-ENV LD_LIBRARY_PATH=/mlc-llm/build:${LD_LIBRARY_PATH}
 ENV PYTHONPATH=""
 ENV PYTHONPATH=/mlc-llm/3rdparty/tvm/python:${PYTHONPATH}
+ENV LD_LIBRARY_PATH=/mlc-llm/build:${LD_LIBRARY_PATH}
 
 # ============================================================
 # Workspace
 # ============================================================
 WORKDIR /mlc-llm
-
-# ============================================================
-# Copy Source
-# ============================================================
 COPY . /mlc-llm
 
 # ============================================================
-# Build TVM (CUDA enabled, cuDNN disabled)
+# Build TVM (CI-safe)
 # ============================================================
 RUN cd 3rdparty/tvm && \
     mkdir -p build && \
@@ -80,33 +72,28 @@ RUN cd 3rdparty/tvm && \
       -DCMAKE_BUILD_TYPE=Release \
       -DUSE_CUDA=ON \
       -DUSE_CUDNN=OFF \
+      -DUSE_CUTLASS=OFF \
+      -DUSE_FLASH_ATTENTION=OFF \
       -DUSE_LLVM=ON \
       -DLLVM_DIR=/usr/lib/llvm-14/lib/cmake/llvm \
       -DUSE_GRAPH_EXECUTOR=ON \
       -DUSE_RELAY_DEBUG=ON && \
     make -j$(nproc)
- 
 
 # ============================================================
-# Install TVM Python (editable, uses built runtime)
+# Install TVM Python
 # ============================================================
-RUN cd 3rdparty/tvm/python && \
-    pip3 install -e .
+RUN cd 3rdparty/tvm/python && pip3 install -e .
 
 # ============================================================
-# Build & Install MLC-LLM Python
+# Install MLC-LLM
 # ============================================================
-RUN cd python && \
-    pip3 install --no-deps dist/*.whl
+RUN cd python && pip3 install --no-deps dist/*.whl
 
 # ============================================================
-# Validation (THIS IS CRITICAL)
+# Validation
 # ============================================================
-RUN python3 -c "import tvm, mlc_llm; print('TVM OK:', tvm.__version__); print('MLC LLM OK')"
+RUN python3 -c "import tvm, mlc_llm; print('TVM OK:', tvm.__version__); print('MLC OK')"
 
-
-# ============================================================
-# Default Entry
-# ============================================================
 CMD ["/bin/bash"]
  
