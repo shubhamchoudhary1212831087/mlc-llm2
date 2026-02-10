@@ -1,4 +1,4 @@
-name: MLC-LLM Production CI/CD
+name: New
 
 on:
   push:
@@ -63,11 +63,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 🟢 FIX: Create 10GB Swap to prevent "Operation Canceled" (OOM)
+      # 🟢 FIX: 10GB Swap using 'dd' to prevent OOM & filesystem errors
       - name: Enable Swap Space (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          sudo fallocate -l 10G /swapfile
+          sudo dd if=/dev/zero of=/swapfile bs=1G count=10
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
           sudo swapon /swapfile
@@ -79,9 +79,11 @@ jobs:
         run: |
           docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           
-          # Run build script inside container
-          docker run --rm -v $PWD:/workspace ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
-          bash -c "build-mlc && validate-mlc"
+          # Pass --memory-swap -1 to allow container to use the swap we just made
+          docker run --rm --memory-swap -1 \
+            -v $PWD:/workspace \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+            bash -c "build-mlc && validate-mlc"
 
       # --- WINDOWS SPECIFIC STEPS ---
       - name: Setup Python (Windows Only)
