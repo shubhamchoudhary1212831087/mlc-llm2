@@ -4,8 +4,8 @@ FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
 # Avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. Install System Dependencies (Vulkan, CMake, Git, Build Tools)
-# CRITICAL FIX: Added spirv-tools, glslang-tools, libspirv-dev
+# 1. Install System Dependencies
+# FIX: Replaced 'libspirv-dev' (invalid) with 'spirv-headers' and 'libspirv-tools-dev'
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
@@ -17,7 +17,8 @@ RUN apt-get update && apt-get install -y \
     vulkan-tools \
     spirv-tools \
     glslang-tools \
-    libspirv-dev \
+    libspirv-tools-dev \
+    spirv-headers \
     curl \
     ca-certificates \
     ninja-build \
