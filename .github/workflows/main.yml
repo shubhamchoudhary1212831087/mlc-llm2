@@ -89,9 +89,6 @@ jobs:
           echo "✅ TVM Build Complete."
 
       # ---------------------------------------------------------
-      # STEP 2: Build MLC-LLM Core (Fixed PATH)
-      # ---------------------------------------------------------
-# ---------------------------------------------------------
       # STEP 2: Build MLC-LLM Core (Symlink Fix)
       # ---------------------------------------------------------
       - name: Build MLC-LLM Core
@@ -115,7 +112,6 @@ jobs:
             -DCMAKE_CUDA_ARCHITECTURES="80;86"
             
           make -j$(nproc)
-          
           
           echo "✅ MLC Build Complete."
 
