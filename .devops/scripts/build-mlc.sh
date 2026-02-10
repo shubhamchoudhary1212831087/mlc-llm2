@@ -7,7 +7,7 @@ echo "🚀 Starting MLC-LLM Build..."
 mkdir -p /workspace/build && cd /workspace/build
 
 # 2. Generate Configuration (MANUAL OVERRIDE)
-# This bypasses the interactive python script entirely to prevent CI failures.
+# This bypasses the interactive python script entirely.
 echo "📝 Writing config.cmake manually..."
 cat > config.cmake <<EOF
 set(TVM_SOURCE_DIR /workspace/3rdparty/tvm)
@@ -22,7 +22,9 @@ EOF
 # 3. Build C++ Runtime
 echo "🔨 Compiling with CMake..."
 cmake .. -G "Unix Makefiles"
-make -j$(nproc)
+
+# 🟢 FIX: Limit to 2 cores to prevent Out-Of-Memory crashes
+make -j2 
 
 # 4. Install Python Bindings
 echo "📦 Installing Python Packages..."
