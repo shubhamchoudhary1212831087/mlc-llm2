@@ -1,5 +1,5 @@
 # File: .github/workflows/production.yml
-name: MLC-LLM Production CI/CD
+name: new-ci.yaml
 
 on:
   push:
