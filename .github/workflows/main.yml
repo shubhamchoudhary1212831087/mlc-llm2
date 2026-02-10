@@ -9,8 +9,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  # Define a single, deterministic tag for this run to avoid "invalid reference format"
-  DOCKER_IMAGE: ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
 
 jobs:
   # ==========================================
@@ -21,6 +19,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      # We export the exact tag we built so the next job can use it
+      docker_image: ${{ steps.set-tag.outputs.image }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -32,14 +33,29 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # We build and push specifically to the DOCKER_IMAGE env var
+      - name: Define and Output Image Tag
+        id: set-tag
+        run: |
+          # 1. Lowercase the repository name (Docker requirement)
+          REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          
+          # 2. Create a single, specific tag using the Commit SHA
+          IMAGE_TAG="ghcr.io/$REPO:${{ github.sha }}"
+          
+          # 3. Save it to GITHUB_OUTPUT so the next job can see it
+          echo "image=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          
+          # 4. Print for debugging
+          echo "Generated Tag: $IMAGE_TAG"
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: docker/Dockerfile
           push: true
-          tags: ${{ env.DOCKER_IMAGE }}
+          # Use the exact tag we just defined
+          tags: ${{ steps.set-tag.outputs.image }}
 
   # ==========================================
   # JOB 2: Linux Build (Inside Docker)
@@ -47,9 +63,10 @@ jobs:
   build-linux:
     needs: build-docker
     runs-on: ubuntu-latest
-    # FIX: Use the explicit single tag defined in env
+    # FIX: Use the 'needs' context, which IS available here
     container:
-      image: ${{ env.DOCKER_IMAGE }}
+      image: ${{ needs.build-docker.outputs.docker_image }}
+      options: --user root # Ensure we have permissions inside the container
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -78,19 +95,16 @@ jobs:
 
       - name: Install & Test (Validation)
         run: |
-          # 1. Install TVM Python bindings first (Crucial Fix)
+          # Install TVM bindings first
           cd 3rdparty/tvm/python
           pip3 install .
-
-          # 2. Install MLC-LLM wheel
+          
+          # Install the wheel we just built
           cd ../../../python
           pip3 install dist/*.whl
-
-          # 3. Validate
-          echo ">>> Validating Import"
-          python3 -c "import mlc_llm; print('Success! Installed at:', mlc_llm.__path__)"
           
-          echo ">>> Validating CLI"
+          # Validate
+          python3 -c "import mlc_llm; print('Success! Installed at:', mlc_llm.__path__)"
           mlc_llm chat -h
 
       - name: Upload Artifact
@@ -141,25 +155,20 @@ jobs:
       - name: Install & Test (Validation)
         shell: cmd
         run: |
-          :: FIX 1: Add the compiled DLLs to PATH so Python can find them
+          :: Add DLLs to PATH
           set PATH=%GITHUB_WORKSPACE%\build\Release;%PATH%
           
-          :: FIX 2: Install TVM Python bindings explicitly
+          :: Install TVM bindings
           cd 3rdparty\tvm\python
           pip install .
           
-          :: FIX 3: Install MLC-LLM without strict build isolation 
-          :: to avoid the specific nvidia-cutlass version error for now
+          :: Install wheel (ignoring strict deps to pass validation)
           cd ..\..\..\python
           pip install --no-deps dist\*.whl
-          
-          :: Manually install strictly required runtime deps if needed
           pip install numpy decorator scipy psutil typing-extensions
 
-          :: Verify Import
+          :: Verify
           python -c "import mlc_llm; print(mlc_llm)"
-          
-          :: Verify CLI
           mlc_llm chat -h
 
       - name: Upload Artifact
