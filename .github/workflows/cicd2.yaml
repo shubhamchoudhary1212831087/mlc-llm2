@@ -13,7 +13,7 @@ env:
 jobs:
 
 # ==========================================================
-# JOB 1 — Build Docker Image
+# JOB 1 — Build Docker Image (TVM + deps)
 # ==========================================================
   build-docker:
     runs-on: ubuntu-latest
@@ -28,6 +28,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -49,9 +51,11 @@ jobs:
           file: docker/docker/Dockerfile
           push: true
           tags: ${{ steps.set-tag.outputs.image }}
+          build-args: |
+            USE_CUDA=OFF
 
 # ==========================================================
-# JOB 2 — Linux Build
+# JOB 2 — Build Wheel + Validate
 # ==========================================================
   build-linux:
     needs: build-docker
@@ -68,41 +72,7 @@ jobs:
           submodules: recursive
 
 # ----------------------------------------------------------
-# Configure & Build (MLC + TVM)
-# ----------------------------------------------------------
-      - name: Configure & Build
-        run: |
-          echo "Building MLC + TVM..."
-
-          mkdir -p build && cd build
-
-          echo "set(TVM_HOME ../3rdparty/tvm)" > config.cmake
-          echo "set(USE_CUDA OFF)" >> config.cmake
-          echo "set(USE_VULKAN ON)" >> config.cmake
-          echo "set(USE_LLVM ON)" >> config.cmake
-
-          cmake ..
-          make -j$(nproc)
-
-          echo "Building TVM runtime in-place..."
-
-          cd ../3rdparty/tvm
-          mkdir -p build && cd build
-
-          cp ../../../build/config.cmake .
-
-          cmake ..
-          make -j$(nproc)
-
-# ----------------------------------------------------------
-# Validate Runtime Exists
-# ----------------------------------------------------------
-      - name: Validate TVM Runtime
-        run: |
-          ls -lh 3rdparty/tvm/build/libtvm*.so
-
-# ----------------------------------------------------------
-# Build Python Wheel
+# Build Python Wheel ONLY
 # ----------------------------------------------------------
       - name: Build Python Wheel
         run: |
@@ -114,28 +84,20 @@ jobs:
 # ----------------------------------------------------------
       - name: Install & Validate
         run: |
-          echo "Installing vendored TVM Python..."
-
-          cd 3rdparty/tvm/python
-          pip3 install -e .
-
           echo "Installing MLC wheel..."
-
-          cd ../../../python
-          pip3 install --no-deps dist/*.whl
+          pip3 install --no-deps python/dist/*.whl
           pip3 install numpy decorator scipy psutil typing-extensions attrs
-
-          export TVM_LIBRARY_PATH=$GITHUB_WORKSPACE/3rdparty/tvm/build
-          export LD_LIBRARY_PATH=$TVM_LIBRARY_PATH:$LD_LIBRARY_PATH
-
-          echo "Runtime path: $TVM_LIBRARY_PATH"
 
           echo "---------------------------------"
           echo " Import Tests"
           echo "---------------------------------"
 
-          python3 -c "import tvm; print('TVM OK:', tvm.__file__)"
-          python3 -c "import mlc_llm; print('MLC OK:', mlc_llm.__path__)"
+          python3 - <<'EOF'
+          import tvm
+          import mlc_llm
+          print("TVM OK:", tvm.__version__)
+          print("MLC OK:", mlc_llm.__path__)
+          EOF
 
           echo "---------------------------------"
           echo " CLI Test"
