@@ -108,20 +108,21 @@ jobs:
 
       - name: Install & Test (Validation)
         run: |
-          # 1. Install TVM bindings (Minimal deps)
+          # 1. FIX: Install missing FFI dependency explicitly
+          pip3 install apache-tvm-ffi
+          
+          # 2. Install TVM bindings
           cd 3rdparty/tvm/python
           pip3 install .
           
-          # 2. Install MLC Wheel (CRITICAL FIX: --no-deps)
-          # We use --no-deps to prevent pip from downloading 5GB+ of nvidia-* wheels
-          # since we already have CUDA in the Docker image.
+          # 3. Install MLC Wheel (--no-deps to save space)
           cd ../../../python
           pip3 install --no-deps dist/*.whl
           
-          # 3. Manually install only the small, required python deps
+          # 4. Manually install small deps
           pip3 install numpy decorator scipy psutil typing-extensions attrs
           
-          # 4. Validate
+          # 5. Validate
           python3 -c "import mlc_llm; print('Success! Installed at:', mlc_llm.__path__)"
           mlc_llm chat -h
 
