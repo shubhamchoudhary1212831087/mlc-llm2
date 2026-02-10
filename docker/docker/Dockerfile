@@ -1,3 +1,6 @@
+# ============================================================
+# Base Image (CUDA headers allowed, no GPU required at build)
+# ============================================================
 FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -12,7 +15,6 @@ RUN apt-get update && apt-get install -y \
     curl \
     wget \
     ca-certificates \
-    software-properties-common \
     python3 \
     python3-dev \
     python3-pip \
@@ -27,7 +29,8 @@ RUN apt-get update && apt-get install -y \
     libzstd-dev \
     && rm -rf /var/lib/apt/lists/*
 
-RUN ln -s /usr/bin/llvm-config-14 /usr/bin/llvm-config
+# TVM expects llvm-config
+RUN ln -sf /usr/bin/llvm-config-14 /usr/bin/llvm-config
 
 # ============================================================
 # Python Dependencies
@@ -49,12 +52,10 @@ RUN pip3 install --upgrade pip && \
 # ============================================================
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=${CUDA_HOME}/bin:${PATH}
-ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
+ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64
 
 ENV TVM_HOME=/mlc-llm/3rdparty/tvm
-ENV PYTHONPATH=""
-ENV PYTHONPATH=/mlc-llm/3rdparty/tvm/python:${PYTHONPATH}
-ENV LD_LIBRARY_PATH=/mlc-llm/build:${LD_LIBRARY_PATH}
+ENV PYTHONPATH=/mlc-llm/3rdparty/tvm/python
 
 # ============================================================
 # Workspace
@@ -63,7 +64,7 @@ WORKDIR /mlc-llm
 COPY . /mlc-llm
 
 # ============================================================
-# Build TVM (CI-safe)
+# Build TVM (CI SAFE)
 # ============================================================
 ARG USE_CUDA=OFF
 
@@ -71,16 +72,18 @@ RUN cd 3rdparty/tvm && \
     mkdir -p build && \
     cd build && \
     cmake .. \
+      -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
       -DUSE_CUDA=${USE_CUDA} \
       -DUSE_CUDNN=OFF \
       -DUSE_CUTLASS=OFF \
       -DUSE_FLASH_ATTENTION=OFF \
       -DUSE_LLVM=ON \
-      -DLLVM_DIR=/usr/lib/llvm-14/lib/cmake/llvm && \
-    make -j$(nproc)
- 
- 
+      -DLLVM_DIR=/usr/lib/llvm-14/lib/cmake/llvm \
+      -DTVM_BUILD_TESTS=OFF \
+      -DTVM_BUILD_EXAMPLES=OFF \
+      -DTVM_BUILD_TUTORIALS=OFF && \
+    ninja
 
 # ============================================================
 # Install TVM Python
@@ -95,7 +98,10 @@ RUN cd python && pip3 install --no-deps dist/*.whl
 # ============================================================
 # Validation
 # ============================================================
-RUN python3 -c "import tvm, mlc_llm; print('TVM OK:', tvm.__version__); print('MLC OK')"
+RUN python3 - <<'EOF'
+import tvm, mlc_llm
+print("TVM OK:", tvm.__version__)
+print("MLC OK")
+EOF
 
 CMD ["/bin/bash"]
- 
