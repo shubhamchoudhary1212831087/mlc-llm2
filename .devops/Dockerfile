@@ -5,8 +5,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CONDA_DIR=/opt/conda \
     PATH=/opt/conda/envs/mlc-chat-venv/bin:/opt/conda/bin:/usr/local/bin:$PATH
 
-# 2. System Dependencies with Retry Logic
-# We add a retry loop to handle 404s during mirror syncs
+# 2. System Dependencies (with retry logic)
 RUN apt-get update && \
     for i in {1..5}; do apt-get install -y --no-install-recommends \
     build-essential git wget curl ca-certificates cmake \
@@ -26,7 +25,6 @@ RUN conda create -y -n mlc-chat-venv -c conda-forge \
 WORKDIR /workspace
 
 # 4. Inject Automation Scripts
-# Ensure you are building from the root of the repo
 COPY .devops/scripts/ /usr/local/bin/
 RUN chmod +x /usr/local/bin/*.sh && \
     ln -sf /usr/local/bin/build-mlc.sh /usr/local/bin/build-mlc && \
