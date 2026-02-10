@@ -1,0 +1,245 @@
+name: MLC-LLM Production Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  # ==========================================
+  # JOB 1: Build & Push Docker Image
+  # ==========================================
+  build-docker:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      docker_image: ${{ steps.set-tag.outputs.image }}
+    steps:
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: false
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Define and Output Image Tag
+        id: set-tag
+        run: |
+          REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_TAG="ghcr.io/$REPO:${{ github.sha }}"
+          echo "image=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          tags: ${{ steps.set-tag.outputs.image }}
+
+  # ==========================================
+  # JOB 2: Linux Build (Inside Docker)
+  # ==========================================
+  build-linux:
+    needs: build-docker
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.build-docker.outputs.docker_image }}
+      options: --user root
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure CMake
+        run: |
+          export PATH=/usr/local/cuda/bin:$PATH
+          mkdir -p build && cd build
+          
+          # Manually create config.cmake
+          echo "set(TVM_HOME ../3rdparty/tvm)" > config.cmake
+          echo "set(USE_CUDA ON)" >> config.cmake
+          echo "set(USE_VULKAN ON)" >> config.cmake
+          echo "set(USE_LLVM OFF)" >> config.cmake
+          
+          cmake ..
+
+      - name: Build Libraries (C++)
+        run: |
+          export PATH=/usr/local/cuda/bin:$PATH
+          cd build
+          make -j$(nproc)
+
+      - name: Validate Shared Libraries
+        run: |
+          if [ -f "build/libmlc_llm.so" ]; then
+            echo "SUCCESS: Found libmlc_llm.so"
+          else
+            echo "ERROR: libmlc_llm.so missing!"
+            ls -R build/
+            exit 1
+          fi
+
+      - name: Build Python Wheel
+        run: |
+          cd python
+          python3 setup.py bdist_wheel
+
+      - name: Install & Test (Validation)
+        run: |
+          # 1. Install missing FFI dependency
+          pip3 install apache-tvm-ffi
+          
+          # 2. Install TVM bindings
+          cd 3rdparty/tvm/python
+          pip3 install .
+          
+          # 3. Install MLC Wheel (--no-deps)
+          cd ../../../python
+          pip3 install --no-deps dist/*.whl
+          
+          # 4. Install small deps
+          pip3 install numpy decorator scipy psutil typing-extensions attrs
+          
+          # 5. CRITICAL FIX: Find library relative to current directory
+          # We are in 'python/' folder. We search up one level ('..') for the library.
+          echo "Searching for library files..."
+          
+          LIB_PATH=$(find .. -name "libtvm_runtime.so" -print -quit)
+          
+          if [ -z "$LIB_PATH" ]; then
+             echo "ERROR: Could not find libtvm_runtime.so!"
+             ls -R ..
+             exit 1
+          fi
+          
+          # Get absolute path using readlink (works inside container)
+          ABS_LIB=$(readlink -f "$LIB_PATH")
+          BUILD_DIR=$(dirname "$ABS_LIB")
+          
+          echo "Found library at: $ABS_LIB"
+          echo "Setting Library Path to: $BUILD_DIR"
+          
+          export TVM_LIBRARY_PATH=$BUILD_DIR
+          export LD_LIBRARY_PATH=$BUILD_DIR:$LD_LIBRARY_PATH
+          
+          # 6. Validate
+          python3 -c "import mlc_llm; print('Success! Installed at:', mlc_llm.__path__)"
+          mlc_llm chat -h
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-wheels
+          path: python/dist/*.whl
+
+  # ==========================================
+  # JOB 3: Windows Build (Native)
+  # ==========================================
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Configure CMake
+        shell: cmd
+        run: |
+          mkdir build && cd build
+          echo set(TVM_HOME ../3rdparty/tvm) > config.cmake
+          echo set(USE_VULKAN ON) >> config.cmake
+          echo set(USE_CUDA OFF) >> config.cmake
+          cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Libraries (C++)
+        shell: cmd
+        run: |
+          cd build
+          cmake --build . --config Release --parallel
+
+      - name: Build Python Wheel
+        shell: cmd
+        run: |
+          pip install setuptools wheel
+          cd python
+          python setup.py bdist_wheel
+
+      - name: Install & Test (Validation)
+        shell: powershell 
+        run: |
+          # CRITICAL FIX: Add Build/Release to PATH and TVM_LIBRARY_PATH
+          $BuildDir = "$env:GITHUB_WORKSPACE\build\Release"
+          
+          $env:PATH += ";$BuildDir"
+          $env:TVM_LIBRARY_PATH = $BuildDir
+          
+          Set-Location 3rdparty\tvm\python
+          pip install .
+          pip install apache-tvm-ffi
+          
+          Set-Location ..\..\..\python
+          $wheel = Get-ChildItem dist\*.whl | Select-Object -First 1
+          pip install --no-deps $wheel.FullName
+          pip install numpy decorator scipy psutil typing-extensions
+          
+          python -c "import mlc_llm; print('MLC Imported Successfully')"
+          mlc_llm chat -h
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-wheels
+          path: python/dist/*.whl
+
+  # ==========================================
+  # JOB 4: Release
+  # ==========================================
+  release:
+    needs: [build-linux, build-windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/*.whl
+          generate_release_notes: true
