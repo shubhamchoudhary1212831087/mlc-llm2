@@ -1,17 +1,18 @@
-# Use NVIDIA CUDA base for GPU support
 FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
 
 # Avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. Update and Enable Universe (Ensures tools are found)
+# 1. SETUP REPOSITORIES (Critical Fix)
+# We install software-properties-common first, then enable 'universe', then update.
+# This ensures 'libspirv-tools-dev' can be found in the next step.
 RUN apt-get update && \
-    apt-get install -y software-properties-common && \
+    apt-get install -y --no-install-recommends software-properties-common && \
     add-apt-repository universe && \
     apt-get update
 
-# 2. Install System Dependencies
-# NOTE: strict package list that exists in Ubuntu 22.04
+# 2. INSTALL DEPENDENCIES
+# Added 'libspirv-tools-dev' which fixes the "_spirv-NOTFOUND" CMake error.
 RUN apt-get install -y \
     build-essential \
     cmake \
@@ -23,18 +24,19 @@ RUN apt-get install -y \
     vulkan-tools \
     spirv-tools \
     glslang-tools \
+    libspirv-tools-dev \
     curl \
     ca-certificates \
     ninja-build \
     && rm -rf /var/lib/apt/lists/*
 
-# 3. Install Rust
+# 3. INSTALL RUST
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
-# 4. Pre-install Python Dependencies
+# 4. PRE-INSTALL PYTHON DEPS
 RUN pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --no-cache-dir \
     numpy \
@@ -48,11 +50,10 @@ RUN pip3 install --no-cache-dir --upgrade pip && \
     typing-extensions \
     pybind11
 
-# 5. Setup Entrypoint
+# 5. SETUP ENTRYPOINT
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# 6. Configuration
 WORKDIR /mlc-llm
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["/bin/bash"]
