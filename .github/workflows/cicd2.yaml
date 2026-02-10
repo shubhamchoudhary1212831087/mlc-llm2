@@ -12,9 +12,9 @@ env:
 
 jobs:
 
-  # ==========================================================
-  # JOB 1 — Build Docker Image
-  # ==========================================================
+# ==========================================================
+# JOB 1 — Build Docker Image
+# ==========================================================
   build-docker:
     runs-on: ubuntu-latest
 
@@ -50,9 +50,9 @@ jobs:
           push: true
           tags: ${{ steps.set-tag.outputs.image }}
 
-  # ==========================================================
-  # JOB 2 — Linux Build
-  # ==========================================================
+# ==========================================================
+# JOB 2 — Linux Build
+# ==========================================================
   build-linux:
     needs: build-docker
     runs-on: ubuntu-latest
@@ -67,6 +67,7 @@ jobs:
         with:
           submodules: recursive
 
+# ---------- Configure ----------
       - name: Configure CMake
         run: |
           mkdir -p build && cd build
@@ -75,23 +76,30 @@ jobs:
           echo "set(USE_CUDA OFF)" >> config.cmake
           echo "set(USE_VULKAN ON)" >> config.cmake
           echo "set(USE_LLVM ON)" >> config.cmake
+          echo "set(USE_RELAX ON)" >> config.cmake
+          echo "set(USE_GRAPH_EXECUTOR ON)" >> config.cmake
+          echo "set(USE_PROFILER ON)" >> config.cmake
 
           cmake ..
 
+# ---------- Build ----------
       - name: Build Libraries
         run: |
           cd build
           make -j$(nproc)
 
+# ---------- Validate ----------
       - name: Validate libmlc_llm
         run: |
           test -f build/libmlc_llm.so || (echo "Missing libmlc_llm.so" && exit 1)
 
+# ---------- Wheel ----------
       - name: Build Python Wheel
         run: |
           cd python
           python3 setup.py bdist_wheel
 
+# ---------- Install + Runtime Validation ----------
       - name: Install & Validate
         run: |
           pip3 install apache-tvm-ffi
@@ -120,6 +128,7 @@ jobs:
           python3 -c "import mlc_llm; print('Import OK:', mlc_llm.__path__)"
           mlc_llm chat -h
 
+# ---------- Artifact ----------
       - name: Upload Wheels
         uses: actions/upload-artifact@v4
         with:
