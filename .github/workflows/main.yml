@@ -22,6 +22,17 @@ jobs:
     outputs:
       docker_image: ${{ steps.set-tag.outputs.image }}
     steps:
+      # FIX 1: Maximize Disk Space before building the huge Docker image
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: false
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -64,12 +75,10 @@ jobs:
 
       - name: Configure CMake
         run: |
-          # Explicitly add CUDA to PATH
           export PATH=/usr/local/cuda/bin:$PATH
-          
           mkdir -p build && cd build
           
-          # Manually create config.cmake to bypass interactive prompt
+          # Manually create config.cmake
           echo "set(TVM_HOME ../3rdparty/tvm)" > config.cmake
           echo "set(USE_CUDA ON)" >> config.cmake
           echo "set(USE_VULKAN ON)" >> config.cmake
@@ -83,27 +92,13 @@ jobs:
           cd build
           make -j$(nproc)
 
-      - name: Validate Shared Libraries (Fixed)
+      - name: Validate Shared Libraries
         run: |
-          echo ">>> Searching for built libraries..."
-          
-          # 1. Check for the main MLC engine
           if [ -f "build/libmlc_llm.so" ]; then
             echo "SUCCESS: Found libmlc_llm.so"
           else
             echo "ERROR: libmlc_llm.so missing!"
             exit 1
-          fi
-          
-          # 2. Find TVM Runtime (it might be in build/ or build/tvm/)
-          TVM_LIB=$(find build -name "libtvm_runtime.so" -print -quit)
-          
-          if [ -n "$TVM_LIB" ]; then
-            echo "SUCCESS: Found libtvm_runtime.so at $TVM_LIB"
-            ls -lh "$TVM_LIB"
-          else
-            echo "WARNING: libtvm_runtime.so not found in build/. It might be statically linked or located elsewhere."
-            echo "Proceeding to Python install verification to confirm."
           fi
 
       - name: Build Python Wheel
@@ -113,15 +108,20 @@ jobs:
 
       - name: Install & Test (Validation)
         run: |
-          # Install TVM bindings
+          # 1. Install TVM bindings (Minimal deps)
           cd 3rdparty/tvm/python
           pip3 install .
           
-          # Install wheel
+          # 2. Install MLC Wheel (CRITICAL FIX: --no-deps)
+          # We use --no-deps to prevent pip from downloading 5GB+ of nvidia-* wheels
+          # since we already have CUDA in the Docker image.
           cd ../../../python
-          pip3 install dist/*.whl
+          pip3 install --no-deps dist/*.whl
           
-          # Validate
+          # 3. Manually install only the small, required python deps
+          pip3 install numpy decorator scipy psutil typing-extensions attrs
+          
+          # 4. Validate
           python3 -c "import mlc_llm; print('Success! Installed at:', mlc_llm.__path__)"
           mlc_llm chat -h
 
@@ -154,11 +154,9 @@ jobs:
         shell: cmd
         run: |
           mkdir build && cd build
-          
           echo set(TVM_HOME ../3rdparty/tvm) > config.cmake
           echo set(USE_VULKAN ON) >> config.cmake
           echo set(USE_CUDA OFF) >> config.cmake
-          
           cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
 
       - name: Build Libraries (C++)
@@ -185,6 +183,7 @@ jobs:
           
           Set-Location ..\..\..\python
           $wheel = Get-ChildItem dist\*.whl | Select-Object -First 1
+          # FIX: Use --no-deps here too to save Windows runner space/time
           pip install --no-deps $wheel.FullName
           pip install numpy decorator scipy psutil typing-extensions
           
