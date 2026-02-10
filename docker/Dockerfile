@@ -1,55 +1,52 @@
-# Use NVIDIA CUDA base for GPU support
-FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
+# 1️⃣ Base Image (Matches your requirement: NVIDIA CUDA dev)
+FROM nvidia/cuda:12.2.0-devel-ubuntu22.04
 
-# Avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. SETUP BUILD TOOLS & ADD VULKAN SDK REPO (LunarG)
-# This fixes the "missing package" errors from before
-RUN apt-get update && \
-    apt-get install -y wget gnupg ca-certificates software-properties-common && \
-    wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | apt-key add - && \
-    wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list && \
-    apt-get update
-
-# 2. INSTALL DEPENDENCIES
-RUN apt-get install -y \
-    build-essential \
-    cmake \
+# 2️⃣ System Dependencies
+# Added 'pkg-config' and 'libssl-dev' which are critical for Rust compilation
+RUN apt-get update && apt-get install -y \
     git \
-    python3-dev \
-    python3-pip \
-    python3-setuptools \
-    vulkan-sdk \
-    curl \
+    cmake \
     ninja-build \
+    build-essential \
+    llvm \
+    clang \
+    curl \
+    ca-certificates \
+    python3 \
+    python3-pip \
+    python3-dev \
+    libtinfo-dev \
+    zlib1g-dev \
+    libxml2-dev \
+    libedit-dev \
+    pkg-config \
+    libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# 3. INSTALL RUST
+# 3️⃣ CRITICAL: Install Rust (Globally available)
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
-# 4. PRE-INSTALL PYTHON DEPS
-RUN pip3 install --no-cache-dir --upgrade pip && \
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --default-toolchain stable && \
+    chmod -R a+w /usr/local/cargo
+
+# 4️⃣ Python Setup
+RUN python3 -m pip install --upgrade pip setuptools wheel && \
     pip3 install --no-cache-dir \
     numpy \
-    decorator \
     scipy \
-    tornado \
     psutil \
-    xgboost \
-    cloudpickle \
+    decorator \
     attrs \
-    typing-extensions \
-    pybind11
+    cloudpickle \
+    typing-extensions
 
-# 5. CRITICAL FIX: ENSURE CUDA IS IN PATH
-ENV PATH=/usr/local/cuda/bin:${PATH}
-ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
+# 5️⃣ Git Safety (Fixes "dubious ownership" errors in CI)
+RUN git config --global --add safe.directory '*'
 
-# 6. SETUP ENTRYPOINT
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
