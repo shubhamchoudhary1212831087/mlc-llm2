@@ -1,12 +1,12 @@
 # ============================================================
-# Base Image (CUDA runtime-capable, CI-safe)
+# Base Image (NO GPU REQUIRED FOR CI)
 # ============================================================
-FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
+FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 # ============================================================
-# System Dependencies
+# System Dependencies (LLVM from Ubuntu repo)
 # ============================================================
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -19,23 +19,23 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     python3-pip \
     python3-setuptools \
-    llvm-14 \
-    llvm-14-dev \
-    clang-14 \
+    llvm \
+    llvm-dev \
+    clang \
     libedit-dev \
     libxml2-dev \
     zlib1g-dev \
     libzstd-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# TVM expects llvm-config
-RUN ln -s /usr/bin/llvm-config-14 /usr/bin/llvm-config
+# llvm-config must exist (Ubuntu provides it)
+RUN llvm-config --version
 
 # ============================================================
-# Python Dependencies (runtime only)
+# Python Dependencies (minimal & correct)
 # ============================================================
-RUN pip3 install --upgrade pip && \
-    pip3 install \
+RUN python3 -m pip install --upgrade pip && \
+    pip install \
         numpy \
         decorator \
         attrs \
@@ -66,37 +66,40 @@ RUN cd 3rdparty/tvm && \
       -DUSE_CUTLASS=OFF \
       -DUSE_FLASH_ATTENTION=OFF \
       -DUSE_LLVM=ON \
-      -DLLVM_DIR=/usr/lib/llvm-14/lib/cmake/llvm \
       -DTVM_BUILD_TESTS=OFF \
       -DTVM_BUILD_EXAMPLES=OFF \
       -DTVM_BUILD_TUTORIALS=OFF && \
     ninja
 
 # ============================================================
-# 🔑 REGISTER TVM RUNTIME (CRITICAL FIX)
+# Environment for TVM Runtime
 # ============================================================
-RUN echo "/mlc-llm/3rdparty/tvm/build" > /etc/ld.so.conf.d/tvm.conf && ldconfig
+ENV TVM_HOME=/mlc-llm/3rdparty/tvm
+ENV PYTHONPATH=/mlc-llm/3rdparty/tvm/python
+ENV LD_LIBRARY_PATH=/mlc-llm/3rdparty/tvm/build
 
 # ============================================================
 # Install TVM Python
 # ============================================================
-RUN cd 3rdparty/tvm/python && pip3 install -e .
+RUN cd 3rdparty/tvm/python && pip install -e .
 
 # ============================================================
-# Build & Install MLC-LLM Python
+# Build MLC-LLM Wheel
 # ============================================================
-RUN cd python && \
-    python3 setup.py bdist_wheel && \
-    pip3 install --no-deps dist/*.whl
+RUN cd python && python3 setup.py bdist_wheel
 
 # ============================================================
-# Validation (FAIL FAST)
+# Install MLC-LLM
 # ============================================================
-RUN python3 - <<'EOF'
-import tvm
-import mlc_llm
-print("TVM OK:", tvm.__version__)
-print("MLC LLM OK")
+RUN cd python && pip install --no-deps dist/*.whl
+
+# ============================================================
+# HARD VALIDATION (fails fast)
+# ============================================================
+RUN python3 - <<'EOF' \
+import tvm, mlc_llm; \
+print("TVM OK:", tvm.__version__); \
+print("MLC OK:", mlc_llm.__file__) \
 EOF
 
 # ============================================================
