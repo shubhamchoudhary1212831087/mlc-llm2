@@ -1,50 +1,42 @@
-# Use NVIDIA CUDA base for GPU support
-FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
+# We need the devel image to get 'nvcc' for compilation
+# even if the runner has no GPU.
+FROM nvidia/cuda:12.2.0-devel-ubuntu22.04
 
-# Avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. Install System Dependencies (Vulkan, CMake, Git, Build Tools)
+# Install dependencies (Matches your Golden Reference)
 RUN apt-get update && apt-get install -y \
-    build-essential \
-    cmake \
     git \
-    python3-dev \
-    python3-pip \
-    python3-setuptools \
-    libvulkan-dev \
-    vulkan-tools \
+    cmake \
+    ninja-build \
+    build-essential \
+    llvm \
+    clang \
     curl \
     ca-certificates \
-    ninja-build \
+    python3 \
+    python3-pip \
+    python3-dev \
+    libtinfo-dev \
+    zlib1g-dev \
+    libxml2-dev \
+    libedit-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Install Rust (Required for HuggingFace Tokenizers)
-ENV RUSTUP_HOME=/usr/local/rustup \
-    CARGO_HOME=/usr/local/cargo \
-    PATH=/usr/local/cargo/bin:$PATH
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-
-# 3. Pre-install Python Dependencies (Speed up CI)
-# We install these globally so both Dev and Build modes use them
-RUN pip3 install --no-cache-dir --upgrade pip && \
+# Install Python deps
+RUN python3 -m pip install --upgrade pip setuptools wheel && \
     pip3 install --no-cache-dir \
     numpy \
-    decorator \
     scipy \
-    tornado \
     psutil \
-    xgboost \
-    cloudpickle \
+    decorator \
     attrs \
-    typing-extensions \
-    pybind11
+    cloudpickle \
+    typing-extensions
 
-# 4. Setup Entrypoint
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# 5. Configuration
 WORKDIR /mlc-llm
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["/bin/bash"]
