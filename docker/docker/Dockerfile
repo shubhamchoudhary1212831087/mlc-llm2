@@ -65,17 +65,21 @@ COPY . /mlc-llm
 # ============================================================
 # Build TVM (CI-safe)
 # ============================================================
+ARG USE_CUDA=OFF
+
 RUN cd 3rdparty/tvm && \
     mkdir -p build && \
     cd build && \
     cmake .. \
       -DCMAKE_BUILD_TYPE=Release \
-      -DUSE_CUDA=OFF \
+      -DUSE_CUDA=${USE_CUDA} \
+      -DUSE_CUDNN=OFF \
+      -DUSE_CUTLASS=OFF \
+      -DUSE_FLASH_ATTENTION=OFF \
       -DUSE_LLVM=ON \
-      -DLLVM_DIR=/usr/lib/llvm-14/lib/cmake/llvm \
-      -DUSE_GRAPH_EXECUTOR=ON \
-      -DUSE_RELAY_DEBUG=ON && \
+      -DLLVM_DIR=/usr/lib/llvm-14/lib/cmake/llvm && \
     make -j$(nproc)
+ 
  
 
 # ============================================================
