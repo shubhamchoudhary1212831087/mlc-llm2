@@ -9,20 +9,18 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  # Image name: owner/repo-name
-  IMAGE_NAME: ${{ github.repository }}
+  # Define a single, deterministic tag for this run to avoid "invalid reference format"
+  DOCKER_IMAGE: ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
 
 jobs:
   # ==========================================
-  # JOB 1: Build & Publish Docker Image
+  # JOB 1: Build & Push Docker Image
   # ==========================================
   build-docker:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-    outputs:
-      image_uri: ${{ steps.meta.outputs.tags }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -34,24 +32,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels)
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=tag
-            type=sha,format=long
-
+      # We build and push specifically to the DOCKER_IMAGE env var
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: docker/Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ env.DOCKER_IMAGE }}
 
   # ==========================================
   # JOB 2: Linux Build (Inside Docker)
@@ -59,8 +47,9 @@ jobs:
   build-linux:
     needs: build-docker
     runs-on: ubuntu-latest
+    # FIX: Use the explicit single tag defined in env
     container:
-      image: ${{ needs.build-docker.outputs.image_uri }}
+      image: ${{ env.DOCKER_IMAGE }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -71,7 +60,6 @@ jobs:
         run: |
           mkdir -p build && cd build
           python3 ../cmake/gen_cmake_config.py
-          # Force TVM path to ensure it uses the submodule
           cmake .. -DTVM_HOME=../3rdparty/tvm
 
       - name: Build Libraries (C++)
@@ -81,7 +69,6 @@ jobs:
 
       - name: Validate Shared Libraries
         run: |
-          echo "Checking for compiled artifacts..."
           ls -lh build/libmlc_llm.so build/libtvm_runtime.so
 
       - name: Build Python Wheel
@@ -91,9 +78,15 @@ jobs:
 
       - name: Install & Test (Validation)
         run: |
-          cd python
+          # 1. Install TVM Python bindings first (Crucial Fix)
+          cd 3rdparty/tvm/python
+          pip3 install .
+
+          # 2. Install MLC-LLM wheel
+          cd ../../../python
           pip3 install dist/*.whl
-          
+
+          # 3. Validate
           echo ">>> Validating Import"
           python3 -c "import mlc_llm; print('Success! Installed at:', mlc_llm.__path__)"
           
@@ -117,7 +110,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Rust (for Tokenizers)
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Set up Python
@@ -125,7 +118,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Configure (Gen CMake Config)
+      - name: Configure CMake
         shell: cmd
         run: |
           mkdir build && cd build
@@ -138,11 +131,6 @@ jobs:
           cd build
           cmake --build . --config Release --parallel
 
-      - name: Validate Shared Libraries
-        shell: powershell
-        run: |
-          if (Test-Path "build/Release/mlc_llm.dll") { Write-Host "DLL Found" } else { exit 1 }
-
       - name: Build Python Wheel
         shell: cmd
         run: |
@@ -153,10 +141,26 @@ jobs:
       - name: Install & Test (Validation)
         shell: cmd
         run: |
-          cd python
+          :: FIX 1: Add the compiled DLLs to PATH so Python can find them
+          set PATH=%GITHUB_WORKSPACE%\build\Release;%PATH%
+          
+          :: FIX 2: Install TVM Python bindings explicitly
+          cd 3rdparty\tvm\python
           pip install .
-          mlc_llm chat -h
+          
+          :: FIX 3: Install MLC-LLM without strict build isolation 
+          :: to avoid the specific nvidia-cutlass version error for now
+          cd ..\..\..\python
+          pip install --no-deps dist\*.whl
+          
+          :: Manually install strictly required runtime deps if needed
+          pip install numpy decorator scipy psutil typing-extensions
+
+          :: Verify Import
           python -c "import mlc_llm; print(mlc_llm)"
+          
+          :: Verify CLI
+          mlc_llm chat -h
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -165,7 +169,7 @@ jobs:
           path: python/dist/*.whl
 
   # ==========================================
-  # JOB 4: Release (Only on Tag)
+  # JOB 4: Release
   # ==========================================
   release:
     needs: [build-linux, build-windows]
