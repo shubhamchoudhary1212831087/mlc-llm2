@@ -1,12 +1,12 @@
 # ============================================================
-# Base Image (NO GPU REQUIRED FOR CI)
+# Base Image (CI-safe, CPU only)
 # ============================================================
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 # ============================================================
-# System Dependencies (LLVM from Ubuntu repo)
+# System Dependencies
 # ============================================================
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -28,11 +28,11 @@ RUN apt-get update && apt-get install -y \
     libzstd-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# llvm-config must exist (Ubuntu provides it)
+# Verify llvm-config exists
 RUN llvm-config --version
 
 # ============================================================
-# Python Dependencies (minimal & correct)
+# Python Dependencies
 # ============================================================
 RUN python3 -m pip install --upgrade pip && \
     pip install \
@@ -72,7 +72,7 @@ RUN cd 3rdparty/tvm && \
     ninja
 
 # ============================================================
-# Environment for TVM Runtime
+# Runtime Environment
 # ============================================================
 ENV TVM_HOME=/mlc-llm/3rdparty/tvm
 ENV PYTHONPATH=/mlc-llm/3rdparty/tvm/python
@@ -84,22 +84,20 @@ ENV LD_LIBRARY_PATH=/mlc-llm/3rdparty/tvm/build
 RUN cd 3rdparty/tvm/python && pip install -e .
 
 # ============================================================
-# Build MLC-LLM Wheel
+# Build & Install MLC-LLM
 # ============================================================
-RUN cd python && python3 setup.py bdist_wheel
+RUN cd python && \
+    python3 setup.py bdist_wheel && \
+    pip install --no-deps dist/*.whl
 
 # ============================================================
-# Install MLC-LLM
+# HARD VALIDATION (CORRECT HEREDOC)
 # ============================================================
-RUN cd python && pip install --no-deps dist/*.whl
-
-# ============================================================
-# HARD VALIDATION (fails fast)
-# ============================================================
-RUN python3 - <<'EOF' \
-import tvm, mlc_llm; \
-print("TVM OK:", tvm.__version__); \
-print("MLC OK:", mlc_llm.__file__) \
+RUN python3 <<EOF
+import tvm
+import mlc_llm
+print("TVM OK:", tvm.__version__)
+print("MLC OK:", mlc_llm.__file__)
 EOF
 
 # ============================================================
