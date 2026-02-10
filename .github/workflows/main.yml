@@ -77,7 +77,6 @@ jobs:
           cd 3rdparty/tvm
           mkdir -p build && cd build
           
-          # Exact flags from your Golden Reference
           cmake .. \
             -DUSE_CUDA=ON \
             -DUSE_CUBLAS=ON \
@@ -90,13 +89,18 @@ jobs:
           echo "✅ TVM Build Complete."
 
       # ---------------------------------------------------------
-      # STEP 2: Build MLC-LLM Core
+      # STEP 2: Build MLC-LLM Core (Fixed PATH)
       # ---------------------------------------------------------
       - name: Build MLC-LLM Core
         run: |
-          # Safety Check: Ensure Rust is actually working
+          # FIX: Explicitly add Rust/Cargo to PATH because GHA resets it
+          export PATH="/usr/local/cargo/bin:$PATH"
+          
+          # Safety Check
           if ! command -v cargo &> /dev/null; then
-             echo "❌ CRITICAL ERROR: Cargo not found. Docker build failed to install Rust."
+             echo "❌ CRITICAL ERROR: Cargo still not found even after path fix."
+             echo "Searching for cargo..."
+             find /usr -name cargo 2>/dev/null || echo "Cargo binary missing from image."
              exit 1
           fi
           echo "✅ Cargo version: $(cargo --version)"
@@ -122,15 +126,15 @@ jobs:
         run: |
           pip3 install -e python
           
-          # Setup Environment Variables (Using relative paths for safety)
+          # Setup Environment Variables
           export TVM_HOME=$(pwd)/3rdparty/tvm
           export TVM_LIBRARY_PATH=$TVM_HOME/build
           
-          # CRITICAL: Include CUDA stubs so linker doesn't crash on CPU runner
+          # FIX: Add CUDA Stubs to LD_LIBRARY_PATH for CPU runner linking
           export LD_LIBRARY_PATH=$(pwd)/build:$TVM_LIBRARY_PATH:/usr/local/cuda/lib64/stubs:$LD_LIBRARY_PATH
           export PYTHONPATH=$(pwd)/python:$TVM_HOME/python:$PYTHONPATH
           
-          echo "Running CLI Help Check (No GPU required)..."
+          echo "Running CLI Help Check..."
           mlc_llm chat -h
           
           echo "✅ Validation Passed"
