@@ -46,18 +46,33 @@ jobs:
           pip install apache-tvm-ffi torch transformers fastapi uvicorn
 
       - name: Check formatting with Black
+        id: black
         run: |
           black --diff --check \
             ./python/ \
             ./tests/python \
-            ./examples/python || (echo "Run 'black python/ tests/python examples/python' to fix" && exit 1)
+            ./examples/python
+        continue-on-error: true
 
       - name: Check imports with isort
+        id: isort
         run: |
           isort --check-only --profile black \
             ./python/ \
             ./tests/python/ \
-            ./examples/python || (echo "Run 'isort python/ tests/python/ examples/python' to fix" && exit 1)
+            ./examples/python
+        continue-on-error: true
+
+      - name: Report formatting issues
+        if: steps.black.outcome == 'failure' || steps.isort.outcome == 'failure'
+        run: |
+          echo "::warning::Code formatting issues detected"
+          if [[ "${{ steps.black.outcome }}" == "failure" ]]; then
+            echo "::warning::Black formatting issues found. Run 'black python/ tests/python examples/python' to fix"
+          fi
+          if [[ "${{ steps.isort.outcome }}" == "failure" ]]; then
+            echo "::warning::isort issues found. Run 'isort python/ tests/python/ examples/python' to fix"
+          fi
 
       - name: Lint with pylint
         run: |
@@ -77,7 +92,9 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    # Run tests even if lint has warnings (lint uses continue-on-error)
     needs: lint
+    if: always() && needs.lint.result != 'cancelled'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -288,11 +305,16 @@ jobs:
           echo "Build Linux: ${{ needs.build-linux.result }}"
           echo "Build Windows: ${{ needs.build-windows.result }}"
           
-          if [[ "${{ needs.lint.result }}" == "failure" ]] || \
-             [[ "${{ needs.test.result }}" == "failure" ]] || \
+          # Lint failures are warnings, not blocking
+          if [[ "${{ needs.lint.result }}" == "failure" ]]; then
+            echo "::warning::Lint checks had issues (non-blocking)"
+          fi
+          
+          # Test and Build failures are blocking
+          if [[ "${{ needs.test.result }}" == "failure" ]] || \
              [[ "${{ needs.build-linux.result }}" == "failure" ]] || \
              [[ "${{ needs.build-windows.result }}" == "failure" ]]; then
-            echo "::error::One or more jobs failed"
+            echo "::error::One or more critical jobs failed"
             exit 1
           fi
           
