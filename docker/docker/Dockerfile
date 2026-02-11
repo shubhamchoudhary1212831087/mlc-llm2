@@ -1,106 +1,58 @@
 # ============================================================
-# Base Image (CI-safe, CPU only)
+# Base Image
 # ============================================================
 FROM ubuntu:22.04
-
 ENV DEBIAN_FRONTEND=noninteractive
 
-# ============================================================
 # System Dependencies
-# ============================================================
 RUN apt-get update && apt-get install -y \
-    build-essential \
-    cmake \
-    ninja-build \
-    git \
-    curl \
-    ca-certificates \
-    python3 \
-    python3-dev \
-    python3-pip \
-    python3-setuptools \
-    llvm \
-    llvm-dev \
-    clang \
-    libedit-dev \
-    libxml2-dev \
-    zlib1g-dev \
-    libzstd-dev \
+    build-essential cmake ninja-build git curl ca-certificates \
+    python3 python3-dev python3-pip llvm llvm-dev clang \
+    libedit-dev libxml2-dev zlib1g-dev libzstd-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Verify llvm-config exists
-RUN llvm-config --version
-
-# ============================================================
 # Python Dependencies
-# ============================================================
-RUN python3 -m pip install --upgrade pip && \
-    pip install \
-        numpy \
-        decorator \
-        attrs \
-        psutil \
-        cloudpickle \
-        scipy \
-        tornado \
-        typing-extensions \
-        pybind11
+RUN pip3 install --upgrade pip setuptools wheel && \
+    pip3 install numpy decorator attrs psutil cloudpickle scipy tornado typing-extensions pybind11
 
-# ============================================================
-# Workspace
-# ============================================================
 WORKDIR /mlc-llm
 COPY . /mlc-llm
 
 # ============================================================
-# Build TVM (CPU-only, CI-safe)
+# Step 1: Build TVM (as per mlc-ai/tvm requirements)
 # ============================================================
 RUN cd 3rdparty/tvm && \
-    mkdir -p build && \
-    cd build && \
-    cmake .. \
-      -G Ninja \
+    mkdir -p build && cd build && \
+    cmake .. -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
-      -DUSE_CUDA=OFF \
-      -DUSE_CUDNN=OFF \
-      -DUSE_CUTLASS=OFF \
-      -DUSE_FLASH_ATTENTION=OFF \
       -DUSE_LLVM=ON \
-      -DTVM_BUILD_TESTS=OFF \
-      -DTVM_BUILD_EXAMPLES=OFF \
-      -DTVM_BUILD_TUTORIALS=OFF && \
+      -DUSE_CUDA=OFF && \
     ninja
 
-# ============================================================
-# Runtime Environment
-# ============================================================
+# Set Envs for TVM
 ENV TVM_HOME=/mlc-llm/3rdparty/tvm
-ENV PYTHONPATH=/mlc-llm/3rdparty/tvm/python
-ENV LD_LIBRARY_PATH=/mlc-llm/3rdparty/tvm/build
+ENV PYTHONPATH=$TVM_HOME/python:${PYTHONPATH}
 
 # ============================================================
-# Install TVM Python
+# Step 2: Build MLC-LLM Native Libraries (CRITICAL MISSING STEP)
 # ============================================================
-RUN cd 3rdparty/tvm/python && pip install -e .
+RUN mkdir -p build && cd build && \
+    # Official docs: generate config first
+    python3 ../cmake/gen_cmake_config.py && \
+    cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release && \
+    ninja
+
+# Link the built library
+ENV LD_LIBRARY_PATH=/mlc-llm/build:/mlc-llm/3rdparty/tvm/build:${LD_LIBRARY_PATH}
 
 # ============================================================
-# Build & Install MLC-LLM
+# Step 3: Install MLC-LLM Python Package
 # ============================================================
 RUN cd python && \
     python3 setup.py bdist_wheel && \
-    pip install --no-deps dist/*.whl
+    pip install dist/*.whl
 
-# ============================================================
-# HARD VALIDATION (CORRECT HEREDOC)
-# ============================================================
-RUN python3 <<EOF
-import tvm
-import mlc_llm
-print("TVM OK:", tvm.__version__)
-print("MLC OK:", mlc_llm.__file__)
-EOF
+# Hard Validation
+RUN python3 -c "import tvm; import mlc_llm; print('TVM Version:', tvm.__version__); print('MLC File:', mlc_llm.__file__)"
 
-# ============================================================
-# Default
-# ============================================================
 CMD ["/bin/bash"]
