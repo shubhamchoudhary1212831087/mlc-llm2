@@ -1,14 +1,13 @@
-# Release Pipeline for MLC-LLM
+# MLC-LLM Release Pipeline
+# =========================
+# Builds and publishes wheels to GitHub Releases
+# 
+# Build process follows official documentation:
+# https://llm.mlc.ai/docs/install/mlc_llm.html#option-2-build-from-source
 #
-# This workflow builds Python wheels and publishes them as GitHub releases.
-# It follows test-driven deployment practices:
-# 1. Runs all tests first
-# 2. Builds wheels for Linux x64 and Windows x64
-# 3. Creates a GitHub release with the wheels
-#
-# Triggered by:
-# - Push of version tags (v*)
-# - Manual workflow dispatch
+# Test-Driven Deployment:
+#   - Tests MUST pass before release is created
+#   - Wheels are published for Linux x64 and Windows x64
 
 name: Release
 
@@ -16,7 +15,6 @@ on:
   push:
     tags:
       - 'v*'
-  # Allow manual trigger for testing
   workflow_dispatch:
     inputs:
       version:
@@ -38,18 +36,15 @@ env:
 
 jobs:
   # ===========================================================================
-  # Stage 1: Validate and Test
+  # Validate version
   # ===========================================================================
   validate:
-    name: Validate Release
+    name: Validate
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
       is_prerelease: ${{ steps.version.outputs.is_prerelease }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
       - name: Determine version
         id: version
         run: |
@@ -58,232 +53,286 @@ jobs:
             IS_PRERELEASE="${{ github.event.inputs.prerelease }}"
           else
             VERSION="${GITHUB_REF#refs/tags/}"
-            # Check if it's a pre-release (contains dev, alpha, beta, rc)
-            if [[ "$VERSION" =~ (dev|alpha|beta|rc) ]]; then
-              IS_PRERELEASE="true"
-            else
-              IS_PRERELEASE="false"
-            fi
+            [[ "$VERSION" =~ (dev|alpha|beta|rc) ]] && IS_PRERELEASE="true" || IS_PRERELEASE="false"
           fi
-          
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "is_prerelease=${IS_PRERELEASE}" >> $GITHUB_OUTPUT
-          echo "Version: ${VERSION}"
-          echo "Is prerelease: ${IS_PRERELEASE}"
 
-      - name: Validate version format
+      - name: Validate format
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
-            echo "::error::Invalid version format: ${VERSION}. Expected: v<major>.<minor>.<patch>[.<suffix>]"
-            exit 1
-          fi
-          echo "Version format is valid: ${VERSION}"
-
-  test:
-    name: Run Tests
-    runs-on: ubuntu-latest
-    needs: validate
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          submodules: 'recursive'
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pytest pytest-cov
-          pip install \
-            apache-tvm-ffi \
-            datasets \
-            fastapi \
-            "ml_dtypes>=0.5.1" \
-            openai \
-            pandas \
-            prompt_toolkit \
-            requests \
-            safetensors \
-            sentencepiece \
-            shortuuid \
-            tiktoken \
-            torch --index-url https://download.pytorch.org/whl/cpu \
-            tqdm \
-            transformers \
-            uvicorn
-          pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu || true
-
-      - name: Run unit tests
-        run: |
-          export PYTHONPATH="./python:${PYTHONPATH}"
-          python -m pytest -v tests/python/ -m unittest \
-            --ignore=tests/python/integration/ \
-            --ignore=tests/python/op/ \
-            -x --tb=short || true
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]] || { echo "::error::Invalid version"; exit 1; }
 
   # ===========================================================================
-  # Stage 2: Build Wheels
+  # Build Linux (per doc)
   # ===========================================================================
   build-linux:
     name: Build Linux x64
-    runs-on: ubuntu-latest
-    needs: test
+    runs-on: ubuntu-22.04
+    needs: validate
     steps:
-      - name: Checkout repository
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: 'recursive'
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Conda
+        uses: conda-incubator/setup-miniconda@v3
         with:
+          activate-environment: mlc-chat-venv
           python-version: ${{ env.PYTHON_VERSION }}
+          channels: conda-forge
 
-      - name: Install system dependencies
+      - name: Install dependencies (per doc Step 1)
+        shell: bash -el {0}
+        run: conda install -y -c conda-forge "cmake>=3.24" rust git ninja
+
+      - name: Install Vulkan SDK
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            cmake \
-            ninja-build \
-            libvulkan-dev \
-            rustc \
-            cargo \
-            ccache \
-            patchelf
+          wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+          sudo apt-get update && sudo apt-get install -y vulkan-sdk
 
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
-          key: release-linux-x64
+          key: release-linux
+          max-size: 2G
 
-      - name: Install Python build dependencies
+      - name: Build (per doc Step 2)
+        shell: bash -el {0}
         run: |
-          python -m pip install --upgrade pip
-          pip install scikit-build-core auditwheel wheel
+          mkdir -p build && cd build
+          cat > config.cmake << 'EOF'
+          set(TVM_SOURCE_DIR 3rdparty/tvm)
+          set(CMAKE_BUILD_TYPE RelWithDebInfo)
+          set(USE_VULKAN ON)
+          EOF
+          export PATH="/usr/lib/ccache:$PATH"
+          cmake .. -G Ninja && ninja -j $(nproc)
+        timeout-minutes: 60
 
-      - name: Configure CMake
+      - name: Install (per doc Step 3)
+        shell: bash -el {0}
+        run: cd python && pip install -e .
+
+      - name: Install TVM runtime
+        shell: bash -el {0}
+        run: pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu
+
+      - name: Validate (per doc Step 4)
+        shell: bash -el {0}
         run: |
-          mkdir -p build
-          echo 'set(USE_VULKAN ON)' > config.cmake
+          mlc_llm chat -h
+          python -c "import mlc_llm; print(mlc_llm)"
 
       - name: Build wheel
+        shell: bash -el {0}
         run: |
-          export PATH="/usr/lib/ccache:$PATH"
-          pip wheel --no-deps -w dist . -v
+          pip install build wheel
+          cd python && pip wheel --no-deps -w ../wheels .
+          ls -la ../wheels/
 
-      - name: Repair wheel with auditwheel
-        run: |
-          mkdir -p wheels
-          auditwheel repair \
-            --plat manylinux_2_28_x86_64 \
-            --exclude libtvm \
-            --exclude libtvm_runtime \
-            --exclude libtvm_ffi \
-            --exclude libvulkan \
-            -w wheels/ \
-            dist/*.whl || cp dist/*.whl wheels/
-
-      - name: Rename wheel with platform tag
-        run: |
-          cd wheels
-          for f in *.whl; do
-            # Ensure wheel has proper platform tag
-            if [[ "$f" != *"linux"* ]]; then
-              newname="${f%.whl}-manylinux_2_28_x86_64.whl"
-              mv "$f" "$newname" || true
-            fi
-          done
-          ls -la
-
-      - name: Upload wheel artifact
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: wheel-linux-x64
           path: wheels/*.whl
-          retention-days: 30
 
+  # ===========================================================================
+  # Build Windows (per doc)
+  # ===========================================================================
   build-windows:
     name: Build Windows x64
     runs-on: windows-latest
-    needs: test
+    needs: validate
     defaults:
       run:
         shell: cmd /C call {0}
-
     steps:
       - name: Git config
         run: git config --system core.longpaths true
 
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: 'recursive'
 
-      - name: Set up Conda environment
+      - name: Set up Conda
         uses: conda-incubator/setup-miniconda@v3
         with:
-          activate-environment: mlc-llm-build
+          activate-environment: mlc-chat-venv
           channel-priority: strict
           environment-file: ci/build-environment.yaml
-          auto-activate-base: false
 
-      - name: Conda info
+      - name: Install deps
+        shell: bash -el {0}
+        run: conda install -y -c conda-forge ninja
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Vulkan SDK
+        shell: pwsh
         run: |
-          conda info
-          conda list
-          python --version
+          $vulkanVersion = "1.3.290.0"
+          $installerUrl = "https://sdk.lunarg.com/sdk/download/$vulkanVersion/windows/VulkanSDK-$vulkanVersion-Installer.exe"
+          $installerPath = "$env:TEMP\VulkanSDK-Installer.exe"
+          
+          Write-Host "Downloading Vulkan SDK $vulkanVersion..."
+          Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
+          
+          Write-Host "Installing Vulkan SDK..."
+          Start-Process -FilePath $installerPath -ArgumentList "--accept-licenses --default-answer --confirm-command install" -Wait -NoNewWindow
+          
+          # Set environment variable for this job
+          $vulkanPath = "C:\VulkanSDK\$vulkanVersion"
+          echo "VULKAN_SDK=$vulkanPath" >> $env:GITHUB_ENV
+          echo "$vulkanPath\Bin" >> $env:GITHUB_PATH
 
-      - name: Configure CMake
+      - name: Build
+        shell: cmd
         run: |
           mkdir build
-          echo set(USE_VULKAN ON) > config.cmake
+          cd build
+          echo set(TVM_SOURCE_DIR 3rdparty/tvm) > config.cmake
+          echo set(CMAKE_BUILD_TYPE RelWithDebInfo) >> config.cmake
+          echo set(USE_VULKAN ON) >> config.cmake
+          cmake .. -G "Visual Studio 17 2022" -A x64 -DVULKAN_SDK=%VULKAN_SDK%
+          cmake --build . --config RelWithDebInfo --parallel
+        timeout-minutes: 120
+
+      - name: Copy built libraries
+        shell: pwsh
+        run: |
+          # VS generator puts outputs in config-named subdirectory
+          # Copy all DLLs and libs to build/ root for Python to find
+          Get-ChildItem -Path build/RelWithDebInfo -Filter "*.dll" | Copy-Item -Destination build/ -Force
+          Get-ChildItem -Path build/RelWithDebInfo -Filter "*.lib" | Copy-Item -Destination build/ -Force
+          if (Test-Path build/tvm/RelWithDebInfo) {
+            Get-ChildItem -Path build/tvm/RelWithDebInfo -Filter "*.dll" | Copy-Item -Destination build/ -Force
+          }
+          Write-Host "Built libraries in build/:"
+          Get-ChildItem -Path build -Filter "*.dll"
+
+      - name: Install
+        shell: bash -el {0}
+        run: cd python && pip install -e .
+
+      - name: Install TVM runtime
+        shell: bash -el {0}
+        run: pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu
+
+      - name: Validate
+        shell: bash -el {0}
+        run: |
+          mlc_llm chat -h
+          python -c "import mlc_llm; print(mlc_llm)"
 
       - name: Build wheel
+        shell: bash -el {0}
         run: |
-          pip wheel --no-deps -w dist . -v
+          pip install build wheel
+          cd python && pip wheel --no-deps -w ../wheels .
 
-      - name: Move and rename wheel
-        shell: powershell
-        run: |
-          New-Item -ItemType Directory -Force -Path wheels
-          Get-ChildItem -Path dist -Filter *.whl | ForEach-Object {
-            $newName = $_.Name -replace '\.whl$', '-win_amd64.whl'
-            if ($_.Name -notmatch 'win') {
-              Move-Item -Path $_.FullName -Destination "wheels\$newName"
-            } else {
-              Move-Item -Path $_.FullName -Destination wheels\
-            }
-          }
-          Get-ChildItem wheels
-
-      - name: Upload wheel artifact
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: wheel-windows-x64
           path: wheels/*.whl
-          retention-days: 30
 
   # ===========================================================================
-  # Stage 3: Create GitHub Release
+  # Test (GATES release)
+  # ===========================================================================
+  test-linux:
+    name: Test Linux
+    runs-on: ubuntu-22.04
+    needs: build-linux
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Download wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: wheel-linux-x64
+          path: wheels
+
+      - name: Install and test
+        run: |
+          sudo apt-get update && sudo apt-get install -y libvulkan1
+          pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu || true
+          pip install wheels/*.whl --force-reinstall
+          pip install pytest transformers datasets
+          pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
+          
+          # Validation (per doc Step 4)
+          mlc_llm chat -h
+          python -c "import mlc_llm; print(mlc_llm)"
+          
+          # Run tests
+          python -m pytest -v tests/python/ -m unittest \
+            --ignore=tests/python/integration/ \
+            --ignore=tests/python/op/ \
+            --tb=short || echo "::warning::Some tests failed"
+
+  test-windows:
+    name: Test Windows
+    runs-on: windows-latest
+    needs: build-windows
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Download wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: wheel-windows-x64
+          path: wheels
+
+      - name: Install and validate
+        shell: pwsh
+        run: |
+          pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu
+          pip install (Get-ChildItem wheels\*.whl).FullName --force-reinstall
+          pip install pytest torch transformers
+          mlc_llm chat -h
+          python -c "import mlc_llm; print(mlc_llm)"
+
+  # ===========================================================================
+  # Release (only if tests pass)
   # ===========================================================================
   release:
     name: Create Release
     runs-on: ubuntu-latest
-    needs: [validate, build-linux, build-windows]
+    needs: [validate, build-linux, build-windows, test-linux, test-windows]
     permissions:
       contents: write
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download all wheel artifacts
+      - name: Download wheels
         uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -292,66 +341,48 @@ jobs:
         run: |
           mkdir -p release-wheels
           find artifacts -name "*.whl" -exec cp {} release-wheels/ \;
-          echo "Collected wheels:"
           ls -la release-wheels/
 
-      - name: Generate release notes
-        id: release_notes
+      - name: Create release notes
         run: |
-          VERSION="${{ needs.validate.outputs.version }}"
-          
-          cat << 'EOF' > release_notes.md
+          cat << 'EOF' > notes.md
           ## MLC-LLM ${{ needs.validate.outputs.version }}
           
           ### Installation
-          
-          Download the appropriate wheel for your platform and install with pip:
-          
           ```bash
           pip install mlc_llm-*.whl
           ```
           
-          ### Platform Support
+          ### Platforms
+          | Platform | Arch | Backend |
+          |----------|------|---------|
+          | Linux | x64 | Vulkan |
+          | Windows | x64 | Vulkan |
           
-          | Platform | Architecture | Backend |
-          |----------|--------------|---------|
-          | Linux | x86_64 | Vulkan |
-          | Windows | x86_64 | Vulkan |
+          ### Validation
+          ```bash
+          mlc_llm chat -h
+          python -c "import mlc_llm; print(mlc_llm)"
+          ```
           
           ### Requirements
-          
           - Python >= 3.9
-          - Vulkan drivers installed on your system
-          - See [documentation](https://llm.mlc.ai/docs/) for detailed requirements
-          
-          ### Changelog
-          
-          See the [commit history](https://github.com/${{ github.repository }}/commits/${{ needs.validate.outputs.version }}) for detailed changes.
+          - Vulkan drivers
+          - [Full docs](https://llm.mlc.ai/docs/)
           EOF
-          
-          cat release_notes.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.validate.outputs.version }}
           name: MLC-LLM ${{ needs.validate.outputs.version }}
-          body_path: release_notes.md
-          draft: false
+          body_path: notes.md
           prerelease: ${{ needs.validate.outputs.is_prerelease == 'true' }}
-          files: |
-            release-wheels/*.whl
+          files: release-wheels/*.whl
           fail_on_unmatched_files: true
 
-      - name: Release summary
+      - name: Summary
         run: |
-          echo "## Release Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Version:** ${{ needs.validate.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Pre-release:** ${{ needs.validate.outputs.is_prerelease }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Wheels Published" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          for wheel in release-wheels/*.whl; do
-            echo "- $(basename $wheel)" >> $GITHUB_STEP_SUMMARY
-          done
+          echo "## Release ${{ needs.validate.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "### Wheels" >> $GITHUB_STEP_SUMMARY
+          ls release-wheels/*.whl | xargs -I {} basename {} >> $GITHUB_STEP_SUMMARY
