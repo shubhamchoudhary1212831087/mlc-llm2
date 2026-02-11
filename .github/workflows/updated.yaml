@@ -1,405 +1,138 @@
-# MLC-LLM CI/CD Pipeline
-# =======================
-# Production-quality workflow following official build documentation:
-# https://llm.mlc.ai/docs/install/mlc_llm.html#option-2-build-from-source
+# MLC-LLM Docker Image Build
+# ==========================
+# Builds and pushes multipurpose Docker image to GitHub Container Registry (GHCR)
 #
-# Test-Driven Deployment:
-#   1. Lint     - Code quality checks (advisory)
-#   2. Build    - Compile libraries (per doc Step 2)
-#   3. Test     - Validate & run tests (per doc Step 4) - GATES RELEASE
-#   4. Artifacts uploaded for release workflow
+# The image serves as BOTH:
+#   1. Development environment (interactive shell, dev tools)
+#   2. Build environment (non-interactive compilation)
+#
+# Usage after pulling from GHCR:
+#   Development: docker run -it --rm -v $(pwd):/workspace ghcr.io/OWNER/mlc-llm:latest /bin/bash
+#   Build:       docker run --rm -v $(pwd):/workspace ghcr.io/OWNER/mlc-llm:latest
 
-name: CI
+name: Docker
 
 on:
   push:
     branches:
       - main
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - '.github/workflows/docker.yaml'
   pull_request:
     branches:
       - main
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - '.github/workflows/docker.yaml'
   workflow_dispatch:
+    inputs:
+      push_image:
+        description: 'Push to GHCR'
+        type: boolean
+        default: true
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  # ===========================================================================
-  # Stage 1: Lint (Advisory - does not block)
-  # ===========================================================================
-  lint:
-    name: Lint
+  build-and-push:
+    name: Build & Push
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - gpu: vulkan
+            tag_suffix: ""
+          - gpu: cpu
+            tag_suffix: "-cpu"
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
         with:
-          python-version: '3.10'
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install linters
-        run: |
-          pip install black isort pylint mypy
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install transformers fastapi uvicorn
-
-      - name: Black
-        run: black --diff --check ./python/ ./tests/python ./examples/python
-        continue-on-error: true
-
-      - name: isort
-        run: isort --check-only --profile black ./python/ ./tests/python/ ./examples/python
-        continue-on-error: true
-
-      - name: pylint
-        run: |
-          export PYTHONPATH="./python:${PYTHONPATH}"
-          pylint --exit-zero ./python/ || true
-        continue-on-error: true
-
-  # ===========================================================================
-  # Stage 2: Build Linux (per doc Step 1-2)
-  # ===========================================================================
-  build-linux:
-    name: Build Linux x64
-    runs-on: ubuntu-22.04
-    outputs:
-      build_status: ${{ steps.build.outcome }}
-    steps:
-      - name: Free disk space
-        run: |
-          echo "Before cleanup:"
-          df -h
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force
-          echo "After cleanup:"
-          df -h
-
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
         with:
-          submodules: 'recursive'
-          fetch-depth: 0
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch,suffix=${{ matrix.tag_suffix }}
+            type=sha,prefix=,suffix=${{ matrix.tag_suffix }}
+            type=raw,value=latest${{ matrix.tag_suffix }},enable={{is_default_branch}}
 
-      # === Doc Step 1: Set up build dependency ===
-      - name: Set up Conda
-        uses: conda-incubator/setup-miniconda@v3
+      - name: Build and push
+        uses: docker/build-push-action@v5
         with:
-          activate-environment: mlc-chat-venv
-          python-version: '3.10'
-          channels: conda-forge
+          context: .
+          file: ./Dockerfile
+          push: ${{ github.event_name != 'pull_request' && github.event.inputs.push_image != 'false' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GPU=${{ matrix.gpu }}
+            PYTHON_VERSION=3.10
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
 
-      - name: Install build dependencies (per doc Step 1)
-        shell: bash -el {0}
+      - name: Test image
         run: |
-          # Per doc: cmake>=3.24, rust, git
-          conda install -y -c conda-forge "cmake>=3.24" rust git ninja
-          echo "=== Verify dependencies (per doc Step 1) ==="
-          cmake --version
-          rustc --version
-          git --version
-
-      - name: Install Vulkan SDK (GPU runtime per doc)
-        run: |
-          wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc
-          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
-          sudo apt-get update
-          sudo apt-get install -y vulkan-sdk
-
-      - name: Set up ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: linux-build
-          max-size: 2G
-
-      # === Doc Step 2: Configure and build ===
-      - name: Create build directory (per doc Step 2)
-        shell: bash -el {0}
-        run: mkdir -p build
-
-      - name: Generate config
-        shell: bash -el {0}
-        run: |
-          cd build
-          cat > config.cmake << 'EOF'
-          set(TVM_SOURCE_DIR 3rdparty/tvm)
-          set(CMAKE_BUILD_TYPE RelWithDebInfo)
-          set(USE_VULKAN ON)
-          set(USE_CUDA OFF)
-          set(USE_METAL OFF)
-          set(USE_OPENCL OFF)
-          EOF
-          cat config.cmake
-
-      - name: Build libraries
-        id: build
-        shell: bash -el {0}
-        run: |
-          export PATH="/usr/lib/ccache:$PATH"
-          cd build
-          cmake .. -G Ninja
-          ninja -j $(nproc)
-          cd ..
-          echo "=== Built libraries ==="
-          find ./build -name "*.so" | head -20
-        timeout-minutes: 60
-
-      # === Doc Step 3: Install via Python ===
-      - name: Install package
-        shell: bash -el {0}
-        run: |
-          cd python
-          pip install -e .
-          cd ..
-
-      - name: Install TVM runtime
-        shell: bash -el {0}
-        run: |
-          # Install TVM nightly (required by mlc_llm)
-          pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu
-
-      - name: Install runtime dependencies
-        shell: bash -el {0}
-        run: |
-          pip install datasets fastapi ml_dtypes openai pandas prompt_toolkit \
-            requests safetensors sentencepiece shortuuid tiktoken tqdm transformers uvicorn
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
-
-      # === Doc Step 4: Validate installation ===
-      - name: Validate (per doc Step 4)
-        shell: bash -el {0}
-        run: |
-          echo "=== Validate installation (per doc Step 4) ==="
-          echo "1. Check libraries: ls -l ./build/"
-          find ./build -name "*.so" | xargs ls -l 2>/dev/null | head -10
+          echo "=== Testing Docker image ==="
           
-          echo ""
-          echo "2. CLI test: mlc_llm chat -h"
-          mlc_llm chat -h
+          # Build locally
+          docker build -t mlc-llm-test:${{ matrix.gpu }} \
+            --build-arg GPU=${{ matrix.gpu }} .
           
-          echo ""
-          echo "3. Import test: python -c 'import mlc_llm; print(mlc_llm)'"
-          python -c "import mlc_llm; print(mlc_llm)"
+          # Test 1: Development mode (interactive shell)
+          echo "Test: Development mode"
+          docker run --rm --entrypoint /bin/bash mlc-llm-test:${{ matrix.gpu }} -c \
+            "python --version && cmake --version && rustc --version"
           
-          echo "=== Validation passed ==="
-
-      - name: Build wheel
-        shell: bash -el {0}
-        run: |
-          pip install build wheel
-          cd python && pip wheel --no-deps -w ../wheels . && cd ..
-          ls -la wheels/
-
-      - name: Upload wheel
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheel-linux-x64
-          path: wheels/*.whl
-          retention-days: 30
-
-  # ===========================================================================
-  # Stage 2: Build Windows (per doc Step 1-2)
-  # ===========================================================================
-  build-windows:
-    name: Build Windows x64
-    runs-on: windows-latest
-    outputs:
-      build_status: ${{ steps.build.outcome }}
-    defaults:
-      run:
-        shell: cmd /C call {0}
-    steps:
-      - name: Git config
-        run: git config --system core.longpaths true
-
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: 'recursive'
-          fetch-depth: 0
-
-      - name: Set up Conda (per doc Step 1)
-        uses: conda-incubator/setup-miniconda@v3
-        with:
-          activate-environment: mlc-chat-venv
-          channel-priority: strict
-          environment-file: ci/build-environment.yaml
-          auto-activate-base: false
-
-      - name: Install dependencies
-        shell: bash -el {0}
-        run: |
-          conda install -y -c conda-forge ninja
-          cmake --version
-          python --version
-
-      - name: Configure and build
-        id: build
-        shell: bash -el {0}
-        run: |
-          mkdir -p build && cd build
-          cat > config.cmake << 'EOF'
-          set(TVM_SOURCE_DIR 3rdparty/tvm)
-          set(CMAKE_BUILD_TYPE RelWithDebInfo)
-          set(USE_VULKAN ON)
-          EOF
-          cmake .. -G Ninja
-          ninja
-          cd ..
-        timeout-minutes: 60
-
-      - name: Install package (per doc Step 3)
-        shell: bash -el {0}
-        run: |
-          cd python
-          pip install -e .
-          cd ..
-
-      - name: Install TVM runtime
-        shell: bash -el {0}
-        run: |
-          pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu
-
-      - name: Validate (per doc Step 4)
-        shell: bash -el {0}
-        run: |
-          mlc_llm chat -h
-          python -c "import mlc_llm; print(mlc_llm)"
-
-      - name: Build wheel
-        shell: bash -el {0}
-        run: |
-          pip install build wheel
-          cd python
-          pip wheel --no-deps -w ../wheels .
-          cd ..
-
-      - name: Upload wheel
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheel-windows-x64
-          path: wheels/*.whl
-          retention-days: 30
-
-  # ===========================================================================
-  # Stage 3: Test (GATES further stages)
-  # ===========================================================================
-  test-linux:
-    name: Test Linux
-    runs-on: ubuntu-22.04
-    needs: build-linux
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Download wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: wheel-linux-x64
-          path: wheels
-
-      - name: Install wheel and dependencies
-        run: |
-          sudo apt-get update && sudo apt-get install -y libvulkan1
-          pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu || true
-          pip install wheels/*.whl --force-reinstall
-          pip install pytest datasets transformers fastapi uvicorn
-          pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
-
-      - name: Validate installation (per doc Step 4)
-        run: |
-          echo "=== Validation tests (per doc Step 4) ==="
-          mlc_llm chat -h
-          python -c "import mlc_llm; print(mlc_llm)"
-
-      - name: Run unit tests
-        id: tests
-        run: |
-          python -m pytest -v tests/python/ -m unittest \
-            --ignore=tests/python/integration/ \
-            --ignore=tests/python/op/ \
-            --tb=short -x
-        continue-on-error: true
-
-      - name: Check test results
-        if: steps.tests.outcome == 'failure'
-        run: |
-          echo "::warning::Some unit tests failed"
-
-  test-windows:
-    name: Test Windows
-    runs-on: windows-latest
-    needs: build-windows
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Download wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: wheel-windows-x64
-          path: wheels
-
-      - name: Install and validate
-        shell: pwsh
-        run: |
-          pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu
-          pip install (Get-ChildItem wheels\*.whl).FullName --force-reinstall
-          pip install pytest torch transformers
-          mlc_llm chat -h
-          python -c "import mlc_llm; print(mlc_llm)"
-
-  # ===========================================================================
-  # Stage 4: CI Summary (Gates release)
-  # ===========================================================================
-  ci-success:
-    name: CI Success
-    runs-on: ubuntu-latest
-    needs: [lint, build-linux, build-windows, test-linux, test-windows]
-    if: always()
-    outputs:
-      success: ${{ steps.check.outputs.success }}
-    steps:
-      - name: Check results
-        id: check
-        run: |
-          echo "Build Linux: ${{ needs.build-linux.result }}"
-          echo "Build Windows: ${{ needs.build-windows.result }}"
-          echo "Test Linux: ${{ needs.test-linux.result }}"
-          echo "Test Windows: ${{ needs.test-windows.result }}"
+          # Test 2: Build entrypoint exists
+          echo "Test: Build entrypoint"
+          docker run --rm --entrypoint /bin/bash mlc-llm-test:${{ matrix.gpu }} -c \
+            "test -x /usr/local/bin/build-entrypoint.sh && echo 'Entrypoint OK'"
           
-          # Builds must succeed
-          if [[ "${{ needs.build-linux.result }}" != "success" ]] || \
-             [[ "${{ needs.build-windows.result }}" != "success" ]]; then
-            echo "::error::Build failed"
-            echo "success=false" >> $GITHUB_OUTPUT
-            exit 1
-          fi
+          # Test 3: Dev init script
+          echo "Test: Dev init script"
+          docker run --rm --entrypoint /bin/bash mlc-llm-test:${{ matrix.gpu }} -c \
+            "source /usr/local/bin/dev-init.sh"
           
-          # Tests must succeed (gates release)
-          if [[ "${{ needs.test-linux.result }}" != "success" ]] || \
-             [[ "${{ needs.test-windows.result }}" != "success" ]]; then
-            echo "::error::Tests failed - blocking release"
-            echo "success=false" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-          
-          echo "success=true" >> $GITHUB_OUTPUT
-          echo "CI passed - ready for release"
+          echo "=== All tests passed for GPU=${{ matrix.gpu }} ==="
 
+      - name: Image info
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "## Docker Image Published" >> $GITHUB_STEP_SUMMARY
+          echo "**Registry:** ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.meta.outputs.tags }}' | tr ',' '\n' | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Usage" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "# Development (interactive)" >> $GITHUB_STEP_SUMMARY
+          echo "docker run -it --rm -v \$(pwd):/workspace ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest${{ matrix.tag_suffix }} /bin/bash" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# Build (non-interactive)" >> $GITHUB_STEP_SUMMARY
+          echo "docker run --rm -v \$(pwd):/workspace ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest${{ matrix.tag_suffix }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
