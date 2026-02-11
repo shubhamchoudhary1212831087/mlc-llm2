@@ -275,6 +275,21 @@ jobs:
           cmake --build . --config RelWithDebInfo --parallel
         timeout-minutes: 120
 
+      - name: Copy built libraries
+        shell: pwsh
+        run: |
+          # VS generator puts outputs in config-named subdirectory
+          # Copy all DLLs and libs to build/ root for Python to find
+          Get-ChildItem -Path build/RelWithDebInfo -Filter "*.dll" | Copy-Item -Destination build/ -Force
+          Get-ChildItem -Path build/RelWithDebInfo -Filter "*.lib" | Copy-Item -Destination build/ -Force
+          # Also check tvm subdirectory
+          if (Test-Path build/tvm/RelWithDebInfo) {
+            Get-ChildItem -Path build/tvm/RelWithDebInfo -Filter "*.dll" | Copy-Item -Destination build/ -Force
+          }
+          # List what we have
+          Write-Host "Built libraries in build/:"
+          Get-ChildItem -Path build -Filter "*.dll"
+
       - name: Install package (per doc Step 3)
         shell: bash -el {0}
         run: |
