@@ -1,14 +1,3 @@
-# MLC-LLM CI/CD Pipeline
-# =======================
-# Production-quality workflow following official build documentation:
-# https://llm.mlc.ai/docs/install/mlc_llm.html#option-2-build-from-source
-#
-# Test-Driven Deployment:
-#   1. Lint     - Code quality checks (advisory)
-#   2. Build    - Compile libraries (per doc Step 2)
-#   3. Test     - Validate & run tests (per doc Step 4) - GATES RELEASE
-#   4. Artifacts uploaded for release workflow
-
 name: CI
 
 on:
