@@ -42,8 +42,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install black isort pylint mypy
+          # Install TVM from MLC wheels (includes apache-tvm-ffi)
+          pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu || true
           # Install dependencies for type checking
-          pip install apache-tvm-ffi torch transformers fastapi uvicorn
+          pip install torch transformers fastapi uvicorn
 
       - name: Check formatting with Black
         id: black
@@ -123,9 +125,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install pytest pytest-cov pytest-xdist
           pip install scikit-build-core
+          # Install TVM from MLC wheels (includes apache-tvm-ffi)
+          pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu || true
           # Install runtime dependencies
           pip install \
-            apache-tvm-ffi \
             datasets \
             fastapi \
             "ml_dtypes>=0.5.1" \
@@ -137,12 +140,11 @@ jobs:
             sentencepiece \
             shortuuid \
             tiktoken \
-            torch --index-url https://download.pytorch.org/whl/cpu \
             tqdm \
             transformers \
             uvicorn
-          # Install TVM nightly for testing
-          pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu || true
+          # Install PyTorch CPU version
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
 
       - name: Run unit tests
         run: |
