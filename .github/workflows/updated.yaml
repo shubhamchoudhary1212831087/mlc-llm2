@@ -314,8 +314,8 @@ jobs:
           sudo apt-get update && sudo apt-get install -y libvulkan1
           pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu || true
           pip install wheels/*.whl --force-reinstall
-          pip install pytest torch --index-url https://download.pytorch.org/whl/cpu
-          pip install datasets transformers fastapi uvicorn
+          pip install pytest datasets transformers fastapi uvicorn
+          pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: Validate installation (per doc Step 4)
         run: |
