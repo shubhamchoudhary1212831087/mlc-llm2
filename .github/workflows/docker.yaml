@@ -1,0 +1,108 @@
+# Build and push multipurpose Docker image to GitHub Container Registry (GHCR)
+#
+# This workflow builds the MLC-LLM Docker image that serves as both:
+# - Development environment (interactive shell, dev tools installed)
+# - Build environment (non-interactive entrypoint for compiling)
+
+name: Docker Build
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'Dockerfile'
+      - '.github/workflows/docker.yaml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'Dockerfile'
+      - '.github/workflows/docker.yaml'
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      push_image:
+        description: 'Push image to GHCR'
+        required: false
+        default: 'true'
+        type: boolean
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - gpu: cpu
+            tag_suffix: ""
+          - gpu: vulkan
+            tag_suffix: "-vulkan"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch,suffix=${{ matrix.tag_suffix }}
+            type=ref,event=pr,suffix=${{ matrix.tag_suffix }}
+            type=sha,prefix=,suffix=${{ matrix.tag_suffix }}
+            type=raw,value=latest${{ matrix.tag_suffix }},enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ github.event_name != 'pull_request' && (github.event.inputs.push_image != 'false') }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GPU=${{ matrix.gpu }}
+            PYTHON_VERSION=3.10
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      - name: Test Docker image
+        run: |
+          # Build locally for testing
+          docker build -t mlc-llm-test:${{ matrix.gpu }} \
+            --build-arg GPU=${{ matrix.gpu }} \
+            --build-arg PYTHON_VERSION=3.10 \
+            .
+          
+          # Test interactive mode (development)
+          docker run --rm mlc-llm-test:${{ matrix.gpu }} /bin/bash -c "python --version && cmake --version"
+          
+          # Test build entrypoint exists
+          docker run --rm --entrypoint /bin/bash mlc-llm-test:${{ matrix.gpu }} -c "test -x /usr/local/bin/build-entrypoint.sh"
+          
+          echo "Docker image tests passed for GPU=${{ matrix.gpu }}"
