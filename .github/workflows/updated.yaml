@@ -69,7 +69,7 @@ jobs:
     outputs:
       build_status: ${{ steps.build.outcome }}
     steps:
-      - name: Checkout (per doc: git clone --recursive)
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: 'recursive'
@@ -111,7 +111,7 @@ jobs:
         shell: bash -el {0}
         run: mkdir -p build
 
-      - name: Generate config (per doc Step 2: gen_cmake_config.py)
+      - name: Generate config
         shell: bash -el {0}
         run: |
           cd build
@@ -125,7 +125,7 @@ jobs:
           EOF
           cat config.cmake
 
-      - name: Build libraries (per doc Step 2: cmake && make)
+      - name: Build libraries
         id: build
         shell: bash -el {0}
         run: |
@@ -139,7 +139,7 @@ jobs:
         timeout-minutes: 60
 
       # === Doc Step 3: Install via Python ===
-      - name: Install package (per doc Step 3: pip install -e .)
+      - name: Install package
         shell: bash -el {0}
         run: |
           cd python
