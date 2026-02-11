@@ -158,6 +158,12 @@ jobs:
           pip install -e .
           cd ..
 
+      - name: Install TVM runtime
+        shell: bash -el {0}
+        run: |
+          # Install TVM nightly (required by mlc_llm)
+          pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu
+
       - name: Install runtime dependencies
         shell: bash -el {0}
         run: |
@@ -254,6 +260,11 @@ jobs:
           cd python
           pip install -e .
           cd ..
+
+      - name: Install TVM runtime
+        shell: bash -el {0}
+        run: |
+          pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu
 
       - name: Validate (per doc Step 4)
         shell: bash -el {0}
