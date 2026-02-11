@@ -11,20 +11,13 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-
-# ==========================================================
-# JOB 1 — Build Docker Image (TVM + deps)
-# ==========================================================
   build-docker:
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
       packages: write
-
     outputs:
       docker_image: ${{ steps.set-tag.outputs.image }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,72 +37,43 @@ jobs:
           REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           echo "image=ghcr.io/$REPO:${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
-      - name: Build & Push Docker Image
+      - name: Build & Push
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: docker/docker/Dockerfile
+          # Path to your Dockerfile (verify this path is correct in your repo)
+          file: docker/docker/Dockerfile 
           push: true
           tags: ${{ steps.set-tag.outputs.image }}
-          build-args: |
-            USE_CUDA=OFF
 
-# ==========================================================
-# JOB 2 — Build Wheel + Validate
-# ==========================================================
   build-linux:
     needs: build-docker
     runs-on: ubuntu-latest
-
     container:
       image: ${{ needs.build-docker.outputs.docker_image }}
       options: --user root
-
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-# ----------------------------------------------------------
-# Build Python Wheel ONLY
-# ----------------------------------------------------------
-      - name: Build Python Wheel
+      # We do NOT checkout here because the Docker image already has the code and the .so built.
+      # If you checkout, you will overwrite /mlc-llm and lose the built libraries.
+      
+      - name: Validate Installation
         run: |
-          cd python
-          python3 setup.py bdist_wheel
-
-# ----------------------------------------------------------
-# Install & Validate
-# ----------------------------------------------------------
-      - name: Install & Validate
-        run: |
-          echo "Installing MLC wheel..."
-          pip3 install --no-deps python/dist/*.whl
-          pip3 install numpy decorator scipy psutil typing-extensions attrs
-
-          echo "---------------------------------"
-          echo " Import Tests"
-          echo "---------------------------------"
-
-          python3 - <<'EOF'
-          import tvm
-          import mlc_llm
-          print("TVM OK:", tvm.__version__)
-          print("MLC OK:", mlc_llm.__path__)
-          EOF
-
-          echo "---------------------------------"
-          echo " CLI Test"
-          echo "---------------------------------"
-
+          # Use the path where we installed everything in the Dockerfile
+          cd /mlc-llm
+          
+          echo "--- Testing Import ---"
+          python3 -c "import tvm; import mlc_llm; print('Success!')"
+          
+          echo "--- Testing CLI ---"
           mlc_llm chat -h
 
-# ----------------------------------------------------------
-# Upload Artifact
-# ----------------------------------------------------------
+      - name: Export Wheels
+        run: |
+          # Copy the pre-built wheel from the docker build to the GH runner workspace
+          cp /mlc-llm/python/dist/*.whl .
+
       - name: Upload Wheels
         uses: actions/upload-artifact@v4
         with:
           name: linux-wheels
-          path: python/dist/*.whl
+          path: ./*.whl
