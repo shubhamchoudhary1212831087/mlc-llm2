@@ -225,13 +225,17 @@ jobs:
           Write-Host "Built libraries in build/:"
           Get-ChildItem -Path build -Filter "*.dll"
 
-      - name: Install
-        shell: bash -el {0}
-        run: cd python && pip install -e .
-
       - name: Install TVM runtime
         shell: bash -el {0}
         run: pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu
+
+      - name: Install
+        shell: bash -el {0}
+        run: |
+          cd python
+          pip install -e . --no-deps
+          pip install datasets fastapi ml_dtypes openai pandas prompt_toolkit requests safetensors sentencepiece shortuuid tiktoken tqdm transformers uvicorn
+          pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: Validate
         shell: bash -el {0}
