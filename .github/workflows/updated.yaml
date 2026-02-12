@@ -401,7 +401,7 @@ jobs:
         shell: bash -el {0}
         run: |
           pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu
-          pip install pytest transformers datasets
+          pip install pytest datasets fastapi ml_dtypes openai pandas prompt_toolkit requests safetensors sentencepiece shortuuid tiktoken tqdm transformers uvicorn
           pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
           pip install wheels/*.whl --force-reinstall --no-deps
           python -m mlc_llm chat -h
