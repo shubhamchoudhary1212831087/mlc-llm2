@@ -317,9 +317,11 @@ jobs:
         shell: pwsh
         run: |
           pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu
-          pip install (Get-ChildItem wheels\*.whl).FullName --force-reinstall
-          pip install pytest torch transformers
-          mlc_llm chat -h
+          pip install pytest transformers datasets
+          pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
+          $wheel = (Get-ChildItem -Path wheels -Filter *.whl)[0].FullName
+          pip install $wheel --force-reinstall --no-deps
+          python -m mlc_llm chat -h
           python -c "import mlc_llm; print(mlc_llm)"
 
   # ===========================================================================
