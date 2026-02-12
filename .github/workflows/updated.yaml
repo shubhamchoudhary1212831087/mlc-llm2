@@ -290,17 +290,21 @@ jobs:
           Write-Host "Built libraries in build/:"
           Get-ChildItem -Path build -Filter "*.dll"
 
+      - name: Install TVM runtime
+        shell: bash -el {0}
+        run: |
+          # --no-deps avoids nvidia-cutlass-dsl (Linux-only, no Windows wheels)
+          pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu --no-deps
+
       - name: Install package (per doc Step 3)
         shell: bash -el {0}
         run: |
           cd python
-          pip install -e .
+          pip install -e . --no-deps
+          # Install runtime deps manually (exclude apache-tvm-ffi, flashinfer)
+          pip install datasets fastapi ml_dtypes openai pandas prompt_toolkit requests safetensors sentencepiece shortuuid tiktoken tqdm transformers uvicorn
+          pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
           cd ..
-
-      - name: Install TVM runtime
-        shell: bash -el {0}
-        run: |
-          pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu
 
       - name: Validate (per doc Step 4)
         shell: bash -el {0}
