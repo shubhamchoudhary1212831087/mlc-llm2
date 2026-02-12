@@ -302,10 +302,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Conda
+        uses: conda-incubator/setup-miniconda@v3
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          auto-activate-base: false
+          environment-file: ci/build-environment.yaml
+          activate-environment: mlc-chat-venv
+
+      - name: Install zstd (required by TVM/tvm.dll on Windows)
+        shell: bash -el {0}
+        run: conda install -y -c conda-forge zstd
 
       - name: Download wheel
         uses: actions/download-artifact@v4
@@ -314,13 +320,12 @@ jobs:
           path: wheels
 
       - name: Install and validate
-        shell: pwsh
+        shell: bash -el {0}
         run: |
           pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu
           pip install pytest transformers datasets
           pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
-          $wheel = (Get-ChildItem -Path wheels -Filter *.whl)[0].FullName
-          pip install $wheel --force-reinstall --no-deps
+          pip install wheels/*.whl --force-reinstall --no-deps
           python -m mlc_llm chat -h
           python -c "import mlc_llm; print(mlc_llm)"
 
