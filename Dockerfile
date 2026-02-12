@@ -113,6 +113,7 @@ RUN pip install \
     rich
 
 # Install MLC-LLM Python dependencies
+# Install from PyPI first, then torch from PyTorch index (--index-url would replace PyPI)
 RUN pip install \
     datasets \
     fastapi \
@@ -125,10 +126,10 @@ RUN pip install \
     sentencepiece \
     shortuuid \
     tiktoken \
-    torch --index-url https://download.pytorch.org/whl/cpu \
     tqdm \
     transformers \
-    uvicorn
+    uvicorn \
+    && pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
 
 # =============================================================================
 # Stage 3: Final multipurpose image
