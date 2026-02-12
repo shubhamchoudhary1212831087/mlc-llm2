@@ -366,18 +366,11 @@ jobs:
           python -c "import mlc_llm; print(mlc_llm)"
 
       - name: Run unit tests
-        id: tests
         run: |
           python -m pytest -v tests/python/ -m unittest \
             --ignore=tests/python/integration/ \
             --ignore=tests/python/op/ \
             --tb=short -x
-        continue-on-error: true
-
-      - name: Check test results
-        if: steps.tests.outcome == 'failure'
-        run: |
-          echo "::warning::Some unit tests failed"
 
   test-windows:
     name: Test Windows
@@ -404,7 +397,7 @@ jobs:
           pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu
           pip install (Get-ChildItem wheels\*.whl).FullName --force-reinstall
           pip install pytest torch transformers
-          mlc_llm chat -h
+          python -m mlc_llm chat -h
           python -c "import mlc_llm; print(mlc_llm)"
 
   # ===========================================================================
