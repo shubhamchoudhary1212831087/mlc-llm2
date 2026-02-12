@@ -1,6 +1,6 @@
-[![Release](https://github.com/shubhamchoudhary1212831087/mlc-llm2/actions/workflows/release.yaml/badge.svg)](https://github.com/shubhamchoudhary1212831087/mlc-llm2/actions/workflows/release.yaml)
+[![Deployment Status Release](https://github.com/shubhamchoudhary1212831087/mlc-llm2/actions/workflows/release.yaml/badge.svg)](https://github.com/shubhamchoudhary1212831087/mlc-llm2/actions/workflows/release.yaml)
 
-[![CI](https://github.com/shubhamchoudhary1212831087/mlc-llm2/actions/workflows/updated.yaml/badge.svg)](https://github.com/shubhamchoudhary1212831087/mlc-llm2/actions/workflows/updated.yaml)
+[![Deployment Sttaus CI](https://github.com/shubhamchoudhary1212831087/mlc-llm2/actions/workflows/updated.yaml/badge.svg)](https://github.com/shubhamchoudhary1212831087/mlc-llm2/actions/workflows/updated.yaml)
 
 
 
