@@ -232,10 +232,9 @@ jobs:
       - name: Install
         shell: bash -el {0}
         run: |
-          cd python
-          pip install -e . --no-deps
           pip install datasets fastapi ml_dtypes openai pandas prompt_toolkit requests safetensors sentencepiece shortuuid tiktoken tqdm transformers uvicorn
           pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
+          cd python && pip install -e . --no-deps
 
       - name: Validate
         shell: bash -el {0}
@@ -289,11 +288,11 @@ jobs:
           mlc_llm chat -h
           python -c "import mlc_llm; print(mlc_llm)"
           
-          # Run tests
+          # Run tests (must pass to gate release)
           python -m pytest -v tests/python/ -m unittest \
             --ignore=tests/python/integration/ \
             --ignore=tests/python/op/ \
-            --tb=short || echo "::warning::Some tests failed"
+            --tb=short
 
   test-windows:
     name: Test Windows
