@@ -1,32 +1,16 @@
-# MLC-LLM Docker Image Build
-# ==========================
-# Builds and pushes multipurpose Docker image to GitHub Container Registry (GHCR)
-#
-# The image serves as BOTH:
-#   1. Development environment (interactive shell, dev tools)
-#   2. Build environment (non-interactive compilation)
-#
-# Usage after pulling from GHCR:
-#   Development: docker run -it --rm -v $(pwd):/workspace ghcr.io/OWNER/mlc-llm:latest /bin/bash
-#   Build:       docker run --rm -v $(pwd):/workspace ghcr.io/OWNER/mlc-llm:latest
+# Docker image build and push (GHCR)
+# Aligned with: https://llm.mlc.ai/docs/install/mlc_llm.html#option-2-build-from-source
+# Build args: MLC_BACKEND = vulkan (default) | cuda per doc GPU runtimes
 
 name: Docker
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - 'Dockerfile'
-      - '.dockerignore'
-      - '.github/workflows/docker.yaml'
+    branches: [main]
+    paths: ['Dockerfile', '.dockerignore', '.github/workflows/docker.yaml']
   pull_request:
-    branches:
-      - main
-    paths:
-      - 'Dockerfile'
-      - '.dockerignore'
-      - '.github/workflows/docker.yaml'
+    branches: [main]
+    paths: ['Dockerfile', '.dockerignore', '.github/workflows/docker.yaml']
   workflow_dispatch:
     inputs:
       push_image:
@@ -50,10 +34,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - gpu: vulkan
+          - backend: vulkan
             tag_suffix: ""
-          - gpu: cpu
-            tag_suffix: "-cpu"
+          - backend: cuda
+            tag_suffix: "-cuda"
 
     steps:
       - name: Checkout
@@ -89,7 +73,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            GPU=${{ matrix.gpu }}
+            MLC_BACKEND=${{ matrix.backend }}
             PYTHON_VERSION=3.10
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -97,42 +81,24 @@ jobs:
 
       - name: Test image
         run: |
-          echo "=== Testing Docker image ==="
-          
-          # Build locally
-          docker build -t mlc-llm-test:${{ matrix.gpu }} \
-            --build-arg GPU=${{ matrix.gpu }} .
-          
-          # Test 1: Development mode (interactive shell)
-          echo "Test: Development mode"
-          docker run --rm --entrypoint /bin/bash mlc-llm-test:${{ matrix.gpu }} -c \
+          docker build -t mlc-llm-test:${{ matrix.backend }} \
+            --build-arg MLC_BACKEND=${{ matrix.backend }} .
+          docker run --rm --entrypoint /bin/bash mlc-llm-test:${{ matrix.backend }} -c \
             "python --version && cmake --version && rustc --version"
-          
-          # Test 2: Build entrypoint exists
-          echo "Test: Build entrypoint"
-          docker run --rm --entrypoint /bin/bash mlc-llm-test:${{ matrix.gpu }} -c \
-            "test -x /usr/local/bin/build-entrypoint.sh && echo 'Entrypoint OK'"
-          
-          # Test 3: Dev init script
-          echo "Test: Dev init script"
-          docker run --rm --entrypoint /bin/bash mlc-llm-test:${{ matrix.gpu }} -c \
-            "source /usr/local/bin/dev-init.sh"
-          
-          echo "=== All tests passed for GPU=${{ matrix.gpu }} ==="
+          docker run --rm --entrypoint /bin/bash mlc-llm-test:${{ matrix.backend }} -c \
+            "test -x /usr/local/bin/build-entrypoint.sh && source /usr/local/bin/dev-init.sh"
 
-      - name: Image info
+      - name: Summary
         if: github.event_name != 'pull_request'
         run: |
-          echo "## Docker Image Published" >> $GITHUB_STEP_SUMMARY
+          echo "## Docker Image" >> $GITHUB_STEP_SUMMARY
           echo "**Registry:** ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
-          echo '${{ steps.meta.outputs.tags }}' | tr ',' '\n' | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY
+          echo "**Tags:** latest${{ matrix.tag_suffix }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Usage" >> $GITHUB_STEP_SUMMARY
+          echo "### Usage (from repo root)" >> $GITHUB_STEP_SUMMARY
           echo '```bash' >> $GITHUB_STEP_SUMMARY
-          echo "# Development (interactive)" >> $GITHUB_STEP_SUMMARY
-          echo "docker run -it --rm -v \$(pwd):/workspace ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest${{ matrix.tag_suffix }} /bin/bash" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "# Build (non-interactive)" >> $GITHUB_STEP_SUMMARY
+          echo "# Development" >> $GITHUB_STEP_SUMMARY
+          echo "docker run -it --rm --entrypoint /bin/bash -v \$(pwd):/workspace ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest${{ matrix.tag_suffix }}" >> $GITHUB_STEP_SUMMARY
+          echo "# Build (Step 2-4)" >> $GITHUB_STEP_SUMMARY
           echo "docker run --rm -v \$(pwd):/workspace ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest${{ matrix.tag_suffix }}" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
